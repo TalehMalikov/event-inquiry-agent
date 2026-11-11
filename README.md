@@ -53,4 +53,4 @@ Try these emails:
 - *"The food was cold last Friday. I want a refund."* → 🔴 waits for the owner
 
 ## AI disclosure
-This project was built with the help of an AI assistant (Claude, by Anthropic). The AI helped design the architecture and write the code, based on my product idea (the traffic-light approval model) and my direction. I reviewed, ran, and tested the code, and I can explain how every part works.
+This project was built with the help of an AI assistant (Claude, by Anthropic). The AI helped design the architecture and write the code, based on my product idea (the traffic-light approval model) and my direction. I reviewed the code and can explain how every part works.
