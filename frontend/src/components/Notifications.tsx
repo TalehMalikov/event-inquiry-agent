@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import InstallApp from "@/components/InstallApp";
 import { api, PushSub } from "@/lib/api";
 
 type Support = "loading" | "ok" | "ios-install" | "unsupported" | "denied";
@@ -103,16 +104,13 @@ export default function Notifications() {
         never ping you.
       </p>
 
+      <div className="mt-3">
+        <InstallApp />
+      </div>
       {support === "loading" && <p className="mt-3 text-sm text-slate-400">Checking this device…</p>}
 
       {support === "ios-install" && (
-        <ol className="mt-3 list-decimal space-y-1 rounded-xl bg-slate-50 p-3 pl-8 text-sm text-slate-700">
-          <li>In Safari, tap the <b>Share</b> button (square with an arrow).</li>
-          <li>
-            Choose <b>Add to Home Screen</b>, then <b>Add</b>.
-          </li>
-          <li>Open the app from your Home Screen and come back to Settings to turn notifications on.</li>
-        </ol>
+        <p className="mt-3 text-sm text-slate-500">After adding it to your Home Screen, open it there and turn notifications on.</p>
       )}
 
       {support === "unsupported" && (

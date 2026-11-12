@@ -8,7 +8,7 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "AI drafts every reply. You approve what matters.",
     start_url: "/",
     display: "standalone",
-    background_color: "#f8fafc",
+    background_color: "#c5382f", // launch screen behind the icon
     theme_color: "#0f172a",
     icons: [
       { src: "/icon-192.png", sizes: "192x192", type: "image/png" },

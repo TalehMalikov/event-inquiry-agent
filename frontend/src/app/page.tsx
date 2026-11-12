@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import MessageCard from "@/components/MessageCard";
+import InstallApp from "@/components/InstallApp";
 import MailboxBar from "@/components/MailboxBar";
 import { api, Message } from "@/lib/api";
 
@@ -55,6 +56,7 @@ export default function InboxPage() {
         </p>
       </div>
 
+      <InstallApp banner />
       <MailboxBar onNewMail={load} />
 
       <div className="flex gap-1 rounded-xl bg-slate-200/60 p-1 text-sm">
