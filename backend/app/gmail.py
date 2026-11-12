@@ -10,6 +10,7 @@ import re
 import threading
 import time
 from email.message import EmailMessage
+from email.policy import SMTP
 from email.utils import getaddresses, make_msgid, parseaddr
 from urllib.parse import urlencode
 
@@ -275,6 +276,13 @@ def skip_reason(email: dict, own_address: str):
 
 # ---------- Replying ----------
 
+def to_html(text: str) -> str:
+    """Paragraphs (blank-line separated) become <p>, single line breaks become <br>. Everything is escaped."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+    inner = "".join(f"<p>{html.escape(p).replace(chr(10), '<br>')}</p>" for p in paras)
+    return f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5">{inner}</div>'
+
+
 def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_reply_to="", references="",
                automatic=False):
     msg = EmailMessage()
@@ -287,8 +295,11 @@ def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = f"{references} {in_reply_to}".strip()
+    # Plain text + an HTML copy: mail apps show the HTML one, which wraps to the screen.
+    # (Plain text alone gets hard-wrapped at ~70 characters by Gmail, breaking lines mid-sentence.)
     msg.set_content(body)
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    msg.add_alternative(to_html(body), subtype="html")
+    raw = base64.urlsafe_b64encode(msg.as_bytes(policy=SMTP)).decode()
     payload = {"raw": raw}
     if thread_id:
         payload["threadId"] = thread_id
