@@ -37,6 +37,10 @@ class HistoryTooOld(GmailError):
     """Our saved position is older than Gmail keeps history for (about a week)."""
 
 
+def push_enabled():
+    return bool(GMAIL_PUBSUB_TOPIC)
+
+
 def configured():
     return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_PROJECT_ID and MAILBOX_ENCRYPTION_KEY)
 

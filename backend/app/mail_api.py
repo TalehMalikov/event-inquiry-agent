@@ -1,7 +1,7 @@
 """Gmail endpoints: connect/disconnect, push notifications from Google, manual check, and the daily job.
 
-Flow for a new email:
-  Gmail -> Pub/Sub -> POST /api/gmail/push -> ingest(): fetch new inbox messages since our saved
+Flow for a new email (push when Pub/Sub is configured, otherwise the scheduled check / "Check now"):
+  Gmail -> Pub/Sub -> POST /api/gmail/push (or GET /api/cron/gmail) -> ingest(): fetch new inbox messages since our saved
   position, skip robots/newsletters, save each once -> process_message() runs the agent.
 """
 import base64
@@ -38,11 +38,12 @@ def _ms_to_dt(ms):
 
 def status_dict(mb):
     if mb is None:
-        return {"connected": False, "configured": gmail.configured()}
+        return {"connected": False, "configured": gmail.configured(), "instant": gmail.push_enabled()}
     return {"connected": True, "configured": True, "provider": mb.provider, "email": mb.email_address,
             "status": mb.status, "last_error": mb.last_error,
             "last_synced_at": mb.last_synced_at.isoformat() if mb.last_synced_at else None,
-            "watch_expires_at": mb.watch_expires_at.isoformat() if mb.watch_expires_at else None}
+            "watch_expires_at": mb.watch_expires_at.isoformat() if mb.watch_expires_at else None,
+            "instant": gmail.push_enabled()}
 
 
 def _mailbox_of(s, company_id):
@@ -170,14 +171,18 @@ def register(app_router: APIRouter):
             mb.refresh_token_enc = gmail.encrypt(tokens["refresh_token"])
             s.flush()
             gmail.forget(mb.id)
-            try:
-                w = gmail.watch(mb)
-            except gmail.GmailError as e:
-                s.rollback()
-                raise HTTPException(502, f"Connected, but Gmail notifications failed: {e}")
             # Start from "now": earlier emails are not answered
-            mb.history_id = str(w["historyId"])
-            mb.watch_expires_at = _ms_to_dt(w.get("expiration"))
+            if gmail.push_enabled():
+                try:
+                    w = gmail.watch(mb)
+                except gmail.GmailError as e:
+                    s.rollback()
+                    raise HTTPException(502, f"Connected, but Gmail notifications failed: {e}")
+                mb.history_id = str(w["historyId"])
+                mb.watch_expires_at = _ms_to_dt(w.get("expiration"))
+            else:  # no push: the scheduled check picks up mail from this point on
+                mb.history_id = str(prof["historyId"])
+                mb.watch_expires_at = None
             mb.status, mb.last_error, mb.last_synced_at = "ok", None, utcnow()
             s.commit()
             return status_dict(mb)
@@ -235,7 +240,8 @@ async def push(request: Request, token: str = ""):
 
 @router.get("/cron/gmail")
 def cron(request: Request):
-    """Daily (Vercel Cron): renew Gmail notifications before their 7-day expiry, and catch any missed mail."""
+    """Scheduled check (cron-job.org every 15 min, Vercel Cron daily as backup): fetch new mail for every
+    mailbox, and (when push is on) renew Gmail notifications before their 7-day expiry."""
     if not CRON_SECRET or not hmac.compare_digest(request.headers.get("authorization", ""), f"Bearer {CRON_SECRET}"):
         raise HTTPException(401, "Unauthorized")
     get_graph()
@@ -245,7 +251,8 @@ def cron(request: Request):
     for mailbox_id in ids:
         with SessionLocal() as s:
             mb = s.get(Mailbox, mailbox_id)
-            if mb.watch_expires_at is None or mb.watch_expires_at < utcnow() + timedelta(days=3):
+            if gmail.push_enabled() and (mb.watch_expires_at is None
+                                         or mb.watch_expires_at < utcnow() + timedelta(days=3)):
                 try:
                     w = gmail.watch(mb)
                     mb.watch_expires_at = _ms_to_dt(w.get("expiration"))

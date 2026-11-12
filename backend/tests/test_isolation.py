@@ -28,7 +28,7 @@ os.environ.update({
     "CLERK_PUBLISHABLE_KEY": "pk_test_ZXhhbXBsZS5jbGVyay5hY2NvdW50cy5kZXYk", "CLERK_SECRET_KEY": "",
     "CLERK_AUTHORIZED_PARTIES": "http://localhost:3000", "DAILY_DRAFT_LIMIT": "3",
     "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_CLIENT_SECRET": "test-secret", "GOOGLE_PROJECT_ID": "test-proj",
-    "GMAIL_PUSH_TOKEN": "push-secret", "CRON_SECRET": "cron-secret",
+    "GMAIL_PUSH_TOKEN": "push-secret", "GMAIL_PUBSUB_TOPIC": "gmail-push", "CRON_SECRET": "cron-secret",
     "MAILBOX_ENCRYPTION_KEY": Fernet.generate_key().decode(),
 })
 
@@ -235,6 +235,20 @@ with TestClient(main.app) as client:
         s.commit()
     r = client.get("/api/cron/gmail", headers={"Authorization": "Bearer cron-secret"})
     check("cron renews expiring Gmail watch", r.status_code == 200 and r.json()["renewed"] == 1 and G.watches == before + 1)
+
+    # --- without Pub/Sub (no Google billing): connect without a watch, scheduled check picks up mail ---
+    gmail.push_enabled = lambda: False
+    C = token("org_C", "user_c")
+    watches_before = G.watches
+    check("C connects without push", connect(client, C, "gamma@gmail.com").status_code == 200
+          and G.watches == watches_before)
+    G.deliver("gamma@gmail.com", "Carol <carol@client.com>", "Hours?", "When are you open?")
+    r = client.get("/api/cron/gmail", headers={"Authorization": "Bearer cron-secret"})
+    check("scheduled check fetches C's new mail", r.status_code == 200
+          and [m["from_email"] for m in client.get("/api/messages", headers=C).json()] == ["carol@client.com"])
+    check("scheduled check doesn't renew watches without push", r.json()["renewed"] == 0)
+    check("scheduled check gave nothing new to A or B", len(client.get("/api/messages", headers=A).json()) == 4)
+    gmail.push_enabled = lambda: True
 
     # --- disconnect ---
     check("A disconnects", client.delete("/api/gmail", headers=A).json()["connected"] is False)

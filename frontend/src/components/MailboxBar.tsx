@@ -14,6 +14,24 @@ export default function MailboxBar({ onNewMail }: { onNewMail: () => void }) {
     api.gmail().then(setMail).catch(() => {});
   }, []);
 
+  // Without instant push, check Gmail every minute while this page is open and visible
+  // (a background job also checks every 15 minutes when nobody has the app open).
+  const autoCheck = mail?.connected && !mail.instant;
+  useEffect(() => {
+    if (!autoCheck) return;
+    const t = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      api
+        .syncGmail()
+        .then((r) => {
+          setMail(r);
+          if (r.new) onNewMail();
+        })
+        .catch(() => {});
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [autoCheck, onNewMail]);
+
   async function check() {
     setBusy(true);
     setNote(null);

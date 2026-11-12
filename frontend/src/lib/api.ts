@@ -96,6 +96,7 @@ export type MailStatus = {
   last_error?: string | null;
   last_synced_at?: string | null;
   watch_expires_at?: string | null;
+  instant?: boolean; // true = Gmail push (seconds); false = checked every minute / 15 minutes
 };
 
 export const api = {
