@@ -63,6 +63,8 @@ The owner app is served at **events.tmalikov.com** (CNAME in GoDaddy to Vercel).
 
 Notes: the backend sets itself up on first request (tables, demo data, embeddings). Emails are processed inside the request (~5-10 s), because serverless functions may stop after replying.
 
+**Email (Gmail):** each company connects its Gmail in Settings (Google OAuth, read + send only; tokens encrypted). New mail is fetched by `GET /api/cron/gmail`: an Upstash QStash schedule (Vercel Marketplace) calls it every 15 minutes, the inbox page checks every minute while open, and Vercel Cron runs it daily as a backup. Instant Gmail push via Google Pub/Sub is built in but off (it needs a Google billing account): set `GMAIL_PUBSUB_TOPIC` to turn it on.
+
 Docker Compose still works for any other host (the backend refuses to start without Clerk configured).
 
 ## Not yet
