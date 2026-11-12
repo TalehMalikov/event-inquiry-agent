@@ -1,6 +1,7 @@
 """FastAPI server: receives emails, runs the agent, and serves the owner's web app."""
 import logging
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -35,11 +36,20 @@ def get_graph():
             if _graph is None:
                 auth.check_config()
                 init_db()
-                _pool = ConnectionPool(CHECKPOINT_URL, max_size=DB_POOL_SIZE, open=True,
+                if _pool:  # left over from a failed attempt
+                    _pool.close()
+                _pool = ConnectionPool(CHECKPOINT_URL, min_size=1, max_size=DB_POOL_SIZE, open=True,
                                        kwargs={"autocommit": True, "prepare_threshold": None,
                                                "row_factory": dict_row})
                 saver = PostgresSaver(_pool)
-                saver.setup()
+                for attempt in range(3):  # another starting copy may be running the same setup
+                    try:
+                        saver.setup()
+                        break
+                    except Exception:  # noqa: BLE001
+                        if attempt == 2:
+                            raise
+                        time.sleep(1)
                 with SessionLocal() as s:
                     if n := rag.backfill(s):
                         log.info("Embedded %d policies", n)
@@ -49,7 +59,11 @@ def get_graph():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    get_graph()  # fail fast on a normal server if config or DB is wrong
+    auth.check_config()  # never run without a password, even for a moment
+    try:
+        get_graph()  # warm up; if it fails, the first request tries again and shows the error
+    except Exception:  # noqa: BLE001
+        log.exception("Startup setup failed; will retry on first request")
     yield
     if _pool:
         _pool.close()

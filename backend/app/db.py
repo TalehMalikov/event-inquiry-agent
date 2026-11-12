@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, create_engine, select, text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .config import DATABASE_URL, DB_POOL_SIZE, EMBED_DIM
 
@@ -94,11 +94,14 @@ DEMO_POLICIES = [
 
 
 def init_db():
+    """Create tables and demo data. Safe when several app copies start at once (serverless):
+    a transaction-scoped lock makes them take turns, and later ones see the work is done."""
     with engine.begin() as conn:
+        conn.execute(text("SELECT pg_advisory_xact_lock(724001)"))
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    Base.metadata.create_all(engine)
+        Base.metadata.create_all(conn)
 
-    with SessionLocal() as s:
+        s = Session(bind=conn)
         if s.scalar(select(Venue).limit(1)):
             return
         venue = Venue(name="The Copper Kettle", green_categories=["info"])
@@ -110,7 +113,7 @@ def init_db():
         vectors = rag.try_embed(DEMO_POLICIES)
         for i, t in enumerate(DEMO_POLICIES):
             s.add(Policy(venue_id=venue.id, text=t, embedding=vectors[i] if vectors else None))
-        s.commit()
+        s.flush()  # the surrounding transaction commits
 
 
 def get_venue(s) -> Venue:
