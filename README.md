@@ -44,13 +44,20 @@ npm install
 npm run dev                              # http://localhost:3000
 ```
 
-## Deploy
+## Deploy (Vercel + Neon)
 
-Any host that runs Docker Compose (a VPS, Railway, Render, Fly.io...). Before going live:
+Two Vercel projects from this repo, plus a Neon Postgres database (has pgvector):
 
-- Put it behind **HTTPS** and set `COOKIE_SECURE=true`.
-- Use a strong `OWNER_PASSWORD` and a random `SESSION_SECRET` (the backend refuses to start without them).
-- Change the Postgres password in `docker-compose.yml`, and don't expose port 5433 publicly.
+| Vercel project | Root directory | Environment variables |
+|---|---|---|
+| backend | `backend` | `OPENAI_API_KEY`, `OWNER_PASSWORD`, `SESSION_SECRET`, `COOKIE_SECURE=true`, `DATABASE_URL` (Neon, pooled) |
+| frontend | `frontend` | `BACKEND_URL` = the backend project's URL |
+
+The owner app is served at **events.tmalikov.com** (CNAME in GoDaddy to Vercel). The browser only talks to the frontend; Next.js forwards `/api/...` to the backend, so the login cookie stays on one domain.
+
+Notes: the backend sets itself up on first request (tables, demo data, embeddings). Emails are processed inside the request (~5-10 s), because serverless functions may stop after replying.
+
+Docker Compose still works for any other host. Use HTTPS with `COOKIE_SECURE=true`, a strong `OWNER_PASSWORD`, and a random `SESSION_SECRET` (the backend refuses to start without them).
 
 ## Not yet
 

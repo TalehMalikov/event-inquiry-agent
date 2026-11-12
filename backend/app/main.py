@@ -1,10 +1,11 @@
 """FastAPI server: receives emails, runs the agent, and serves the owner's web app."""
 import logging
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 from psycopg.rows import dict_row
@@ -14,33 +15,52 @@ from sqlalchemy import delete, select
 
 from . import auth, rag
 from .agent import ALWAYS_RED, CATEGORIES, build_graph
-from .config import CHECKPOINT_URL
+from .config import CHECKPOINT_URL, DB_POOL_SIZE
 from .db import Message, Policy, Room, SessionLocal, get_venue, init_db, utcnow
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
-graph = None
+_graph = None
+_pool = None
+_init_lock = threading.Lock()
+
+
+def get_graph():
+    """Set up the database and agent once per process, on first use.
+
+    Lazy (not only at startup) because serverless hosts like Vercel may not run startup hooks."""
+    global _graph, _pool
+    if _graph is None:
+        with _init_lock:
+            if _graph is None:
+                auth.check_config()
+                init_db()
+                _pool = ConnectionPool(CHECKPOINT_URL, max_size=DB_POOL_SIZE, open=True,
+                                       kwargs={"autocommit": True, "prepare_threshold": None,
+                                               "row_factory": dict_row})
+                saver = PostgresSaver(_pool)
+                saver.setup()
+                with SessionLocal() as s:
+                    if n := rag.backfill(s):
+                        log.info("Embedded %d policies", n)
+                _graph = build_graph(saver)
+    return _graph
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global graph
-    auth.check_config()
-    init_db()
-    pool = ConnectionPool(CHECKPOINT_URL, max_size=10, open=True,
-                          kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row})
-    saver = PostgresSaver(pool)
-    saver.setup()
-    graph = build_graph(saver)
-    with SessionLocal() as s:
-        if n := rag.backfill(s):
-            log.info("Embedded %d policies", n)
+    get_graph()  # fail fast on a normal server if config or DB is wrong
     yield
-    pool.close()
+    if _pool:
+        _pool.close()
+
+
+def ready():
+    get_graph()
 
 
 app = FastAPI(title="Event Inquiry Agent API", lifespan=lifespan, docs_url=None, redoc_url=None)
-owner = APIRouter(prefix="/api", dependencies=[Depends(auth.require_owner)])
+owner = APIRouter(prefix="/api", dependencies=[Depends(auth.require_owner), Depends(ready)])
 
 
 def cfg(thread_id):
@@ -92,7 +112,7 @@ def sync_from_graph(message_id: int):
     """Copy the agent's results from LangGraph state into our Message record."""
     with SessionLocal() as s:
         m = s.get(Message, message_id)
-        snap = graph.get_state(cfg(m.thread_id))
+        snap = get_graph().get_state(cfg(m.thread_id))
         v = snap.values
         req, d = v.get("request", {}), v.get("draft", {})
         m.category, m.summary = req.get("category"), req.get("summary")
@@ -121,7 +141,7 @@ def process_message(message_id: int):
         }
         thread_id = m.thread_id
     try:
-        graph.invoke(inputs, cfg(thread_id))
+        get_graph().invoke(inputs, cfg(thread_id))
         sync_from_graph(message_id)
     except Exception as e:  # noqa: BLE001
         log.exception("Agent failed on message %s", message_id)
@@ -152,15 +172,19 @@ def list_messages():
 
 
 @owner.post("/messages/simulate")
-def simulate_email(email: IncomingEmail, tasks: BackgroundTasks):
-    """Stand-in for a real inbox until Outlook is connected."""
+def simulate_email(email: IncomingEmail):
+    """Stand-in for a real inbox until Outlook is connected.
+
+    The agent runs before we reply (~5-10 s): serverless hosts may stop work left running after the response."""
     with SessionLocal() as s:
         venue = get_venue(s)
         m = Message(venue_id=venue.id, thread_id=str(uuid.uuid4()), status="processing", **email.model_dump())
         s.add(m)
         s.commit()
-        tasks.add_task(process_message, m.id)
-        return to_dict(m)
+        message_id = m.id
+    process_message(message_id)
+    with SessionLocal() as s:
+        return to_dict(s.get(Message, message_id))
 
 
 def _resume(message_id: int, decision: dict):
@@ -171,7 +195,7 @@ def _resume(message_id: int, decision: dict):
         if m.status != "waiting":
             raise HTTPException(409, f"Message is '{m.status}', not waiting for approval")
         thread_id = m.thread_id
-    graph.invoke(Command(resume=decision), cfg(thread_id))
+    get_graph().invoke(Command(resume=decision), cfg(thread_id))
     return sync_from_graph(message_id)
 
 
@@ -186,14 +210,14 @@ def reject(message_id: int):
 
 
 @owner.post("/messages/{message_id}/retry")
-def retry(message_id: int, tasks: BackgroundTasks):
+def retry(message_id: int):
     with SessionLocal() as s:
         m = s.get(Message, message_id)
         if not m or m.status != "error":
             raise HTTPException(409, "Only failed messages can be retried")
         m.status, m.error, m.thread_id = "processing", None, str(uuid.uuid4())
         s.commit()
-    tasks.add_task(process_message, message_id)
+    process_message(message_id)
     return {"ok": True}
 
 

@@ -6,9 +6,11 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, create_engine, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-from .config import DATABASE_URL, EMBED_DIM
+from .config import DATABASE_URL, DB_POOL_SIZE, EMBED_DIM
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# prepare_threshold=None: no prepared statements, so it also works through a connection pooler (Neon/PgBouncer)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=DB_POOL_SIZE, max_overflow=0,
+                       connect_args={"prepare_threshold": None})
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
