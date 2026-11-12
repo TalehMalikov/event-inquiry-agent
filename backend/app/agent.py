@@ -36,6 +36,7 @@ def model():
 
 
 class EmailState(TypedDict, total=False):
+    send_error: str
     # input
     message_id: int
     company_id: int
@@ -184,11 +185,15 @@ def owner_review(state: EmailState):
 
 
 def send(state: EmailState):
-    if state["color"] == "green":
+    automatic = state["color"] == "green"
+    if automatic:
         reply, update = state["draft"]["reply"], {"final_reply": state["draft"]["reply"], "status": "sent_automatically"}
     else:
         reply, update = state["final_reply"], {}
-    outbox.send(to=state["from_email"], subject=f"Re: {state['subject']}", body=reply)
+    try:
+        outbox.send(state["message_id"], reply, automatic=automatic)
+    except Exception as e:  # noqa: BLE001  (shown on the email; the owner can retry)
+        return {**update, "final_reply": reply, "status": "error", "send_error": f"Sending failed: {e}"[:2000]}
     return update
 
 

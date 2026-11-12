@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import MessageCard from "@/components/MessageCard";
-import SimulateEmail from "@/components/SimulateEmail";
+import MailboxBar from "@/components/MailboxBar";
 import { api, Message } from "@/lib/api";
 
 type Tab = "needs_you" | "handled" | "all";
@@ -55,7 +55,7 @@ export default function InboxPage() {
         </p>
       </div>
 
-      <SimulateEmail onSent={load} />
+      <MailboxBar onNewMail={load} />
 
       <div className="flex gap-1 rounded-xl bg-slate-200/60 p-1 text-sm">
         {(
@@ -81,7 +81,7 @@ export default function InboxPage() {
       {messages === null && !error && <p className="text-sm text-slate-400">Loading…</p>}
       {messages !== null && list.length === 0 && (
         <p className="py-10 text-center text-sm text-slate-400">
-          {tab === "needs_you" ? "Nothing waiting for you. 🎉" : "No emails here yet."}
+          {tab === "needs_you" ? "Nothing waiting for you. 🎉" : "No emails yet. New emails to your connected inbox show up here."}
         </p>
       )}
 

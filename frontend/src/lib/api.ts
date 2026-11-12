@@ -87,10 +87,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+export type MailStatus = {
+  connected: boolean;
+  configured: boolean;
+  provider?: string;
+  email?: string;
+  status?: "ok" | "error";
+  last_error?: string | null;
+  last_synced_at?: string | null;
+  watch_expires_at?: string | null;
+};
+
 export const api = {
+  gmail: () => request<MailStatus>("/gmail"),
+  connectGmail: () => request<{ url: string }>("/gmail/connect", { method: "POST" }),
+  finishGmail: (code: string, state: string) =>
+    request<MailStatus>("/gmail/callback", { method: "POST", body: JSON.stringify({ code, state }) }),
+  disconnectGmail: () => request<MailStatus>("/gmail", { method: "DELETE" }),
+  syncGmail: () => request<MailStatus & { new: number }>("/gmail/sync", { method: "POST" }),
   messages: () => request<Message[]>("/messages"),
-  simulate: (email: { from_name: string; from_email: string; subject: string; body: string }) =>
-    request<Message>("/messages/simulate", { method: "POST", body: JSON.stringify(email) }),
   approve: (id: number, text: string) =>
     request<Message>(`/messages/${id}/approve`, { method: "POST", body: JSON.stringify({ text }) }),
   reject: (id: number) => request<Message>(`/messages/${id}/reject`, { method: "POST" }),

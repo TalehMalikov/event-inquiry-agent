@@ -19,7 +19,7 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
-from . import auth, rag
+from . import auth, mail_api, rag
 from .agent import ALWAYS_RED, CATEGORIES, build_graph
 from .config import CHECKPOINT_URL, DAILY_DRAFT_LIMIT, DB_POOL_SIZE
 from .db import Company, Message, Policy, Room, SessionLocal, get_company, init_db, utcnow
@@ -155,6 +155,7 @@ def sync_from_graph(message_id: int):
         m.facts = {"rooms": v.get("rooms", []), "policies": v.get("policies", []), "request": req}
         m.draft, m.final_reply = d.get("reply"), v.get("final_reply")
         m.was_edited = v.get("was_edited")
+        m.error = v.get("send_error")
         if snap.next:
             m.status = "waiting"
         else:
@@ -185,23 +186,16 @@ def process_message(message_id: int):
             s.commit()
 
 
-def check_daily_limit(s, company_id: int):
-    """Each company can create at most DAILY_DRAFT_LIMIT AI drafts per UTC day (protects the OpenAI bill)."""
+def over_daily_limit(s, company_id: int) -> bool:
+    """Each company gets at most DAILY_DRAFT_LIMIT AI drafts per UTC day (protects the OpenAI bill)."""
     start = datetime.combine(datetime.now(timezone.utc).date(), dtime.min, tzinfo=timezone.utc)
     used = s.scalar(select(func.count(Message.id)).where(Message.company_id == company_id,
-                                                         Message.received_at >= start))
-    if used >= DAILY_DRAFT_LIMIT:
-        raise HTTPException(429, f"Daily limit reached ({DAILY_DRAFT_LIMIT} AI drafts per day). Try again tomorrow.")
+                                                         Message.received_at >= start,
+                                                         Message.status != "error"))
+    return used >= DAILY_DRAFT_LIMIT
 
 
 # ---------- Messages ----------
-
-class IncomingEmail(BaseModel):
-    from_name: str = Field("Customer", max_length=200)
-    from_email: str = Field("customer@example.com", max_length=320)
-    subject: str = Field("Event inquiry", max_length=500)
-    body: str = Field(min_length=1, max_length=20000)
-
 
 class Decision(BaseModel):
     text: Optional[str] = Field(None, max_length=20000)
@@ -213,23 +207,6 @@ def list_messages(who: Who = Depends(current)):
         rows = s.scalars(select(Message).where(Message.company_id == who.company_id)
                          .order_by(Message.received_at.desc()).limit(200))
         return [to_dict(m) for m in rows]
-
-
-@api.post("/messages/simulate")
-def simulate_email(email: IncomingEmail, who: Who = Depends(current)):
-    """Stand-in for a real inbox until email is connected.
-
-    The agent runs before we reply (~5-10 s): serverless hosts may stop work left running after the response."""
-    with SessionLocal() as s:
-        check_daily_limit(s, who.company_id)
-        m = Message(company_id=who.company_id, thread_id=str(uuid.uuid4()), status="processing",
-                    **email.model_dump())
-        s.add(m)
-        s.commit()
-        message_id = m.id
-    process_message(message_id)
-    with SessionLocal() as s:
-        return to_dict(s.get(Message, message_id))
 
 
 def _resume(who: Who, message_id: int, decision: dict):
@@ -258,6 +235,8 @@ def retry(message_id: int, who: Who = Depends(current)):
         m = own_message(s, who, message_id)
         if m.status != "error":
             raise HTTPException(409, "Only failed messages can be retried")
+        if over_daily_limit(s, who.company_id):
+            raise HTTPException(429, f"Daily limit reached ({DAILY_DRAFT_LIMIT} AI drafts per day). Try again tomorrow.")
         m.status, m.error, m.thread_id = "processing", None, str(uuid.uuid4())
         s.commit()
     process_message(message_id)
@@ -349,4 +328,8 @@ def put_settings(body: SettingsIn, who: Who = Depends(admin)):
     return get_settings(who)
 
 
+mail_api.setup(current=current, admin=admin, process_message=process_message,
+               over_daily_limit=over_daily_limit, get_graph=get_graph)
+mail_api.register(api)
 app.include_router(api)
+app.include_router(mail_api.router)

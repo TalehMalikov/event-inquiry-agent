@@ -27,5 +27,15 @@ CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "")
 CLERK_AUTHORIZED_PARTIES = [o.strip() for o in os.getenv("CLERK_AUTHORIZED_PARTIES", "").split(",") if o.strip()]
 # Protects your OpenAI bill: max AI drafts per company per day (UTC)
 DAILY_DRAFT_LIMIT = int(os.getenv("DAILY_DRAFT_LIMIT", "50"))
+# Gmail (Google Cloud project with Gmail API + Pub/Sub)
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID", "")
+GMAIL_PUBSUB_TOPIC = os.getenv("GMAIL_PUBSUB_TOPIC", "gmail-push")
+GMAIL_PUSH_TOKEN = os.getenv("GMAIL_PUSH_TOKEN", "")
+MAILBOX_ENCRYPTION_KEY = os.getenv("MAILBOX_ENCRYPTION_KEY", "")
+APP_URL = os.getenv("APP_URL", "http://localhost:3000").rstrip("/")
+# Vercel sends "Authorization: Bearer <CRON_SECRET>" to scheduled jobs
+CRON_SECRET = os.getenv("CRON_SECRET", "")
 # Serverless hosts run many small copies of the app, so keep each one's DB connections few
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
