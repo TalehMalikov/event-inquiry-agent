@@ -73,9 +73,11 @@ def traffic_light(category, draft):
 	reasons = []
 	if category in ("complaint", "refund"):
 		return "red", [f"Sensitive topic: {category}"]
+	# Too many guests is only a problem if the draft offers it, not if it politely declines it
+	declining = re.search(r"\b(can['’]t|cannot|can not|unable|unfortunately|only up to|up to \d+)\b", draft, re.I)
 	guests = [int(n) for n in re.findall(r"(\d+)\s*(?:guests|people)", draft)]
-	if any(n > MAX_GUESTS for n in guests):
-		return "red", [f"Draft mentions more than {MAX_GUESTS} guests"]
+	if any(n > MAX_GUESTS for n in guests) and not declining:
+		return "red", [f"Draft offers more than {MAX_GUESTS} guests"]
 	if "$" in draft:
 		reasons.append("Reply includes a price")
 	if re.search(r"\b(confirm|booked|reserved|see you on)\b", draft, re.I):
