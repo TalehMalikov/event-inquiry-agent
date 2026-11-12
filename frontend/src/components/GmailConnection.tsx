@@ -41,8 +41,9 @@ export default function GmailConnection({ canEdit }: { canEdit: boolean }) {
     <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200 sm:p-5">
       <h2 className="font-semibold">Email inbox</h2>
       <p className="text-xs text-slate-500">
-        The AI reads new emails in this inbox and replies from it. It can read and send, never delete. Newsletters,
-        promotions and automatic emails are ignored.
+        The AI reads new emails in this inbox and replies from it. Replies that need you wait as a draft in the
+        Gmail thread, with a colored label, so you can just press Send there. It never deletes your mail.
+        Newsletters, promotions and automatic emails are ignored.
       </p>
       {error && <p className="mt-3 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
       {!mail ? (
@@ -60,6 +61,11 @@ export default function GmailConnection({ canEdit }: { canEdit: boolean }) {
             </div>
           </div>
           {mail.last_error && <p className="rounded-xl bg-rose-50 p-3 text-sm text-rose-700">{mail.last_error}</p>}
+          {mail.can_draft === false && (
+            <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+              Click <b>Reconnect</b> once to let the AI put drafts and colored labels in your Gmail.
+            </p>
+          )}
           {canEdit && (
             <div className="flex gap-2">
               <button

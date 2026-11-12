@@ -1,7 +1,9 @@
-"""Gmail connection: connect (OAuth), learn about new mail (Pub/Sub push + history), read, reply.
+"""Gmail connection: connect (OAuth), learn about new mail, read, put drafts + colored labels in the
+owner's inbox, and send replies.
 
 Plain REST calls (httpx) instead of Google's heavy client libraries, to keep the serverless bundle small.
-Scopes: read + send only. The app can never delete or change the owner's mail.
+Scope: gmail.modify = read, draft, label, send. It cannot delete mail permanently, and the app never
+deletes or trashes anything; it only removes its own drafts and labels.
 """
 import base64
 import html
@@ -22,7 +24,17 @@ from .config import (APP_URL, GMAIL_PUBSUB_TOPIC, GOOGLE_CLIENT_ID, GOOGLE_CLIEN
 
 log = logging.getLogger("gmail")
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
+MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+SCOPES = [MODIFY]
+# Mailboxes connected before drafts/labels existed granted only these: they keep working (read + send)
+LEGACY_SCOPES = {"https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"}
+
+# The traffic light, shown in the owner's Gmail. Colors must come from Gmail's label palette.
+LABELS = {
+    "green": ("AI · Sent", "#16a766", "#ffffff"),
+    "yellow": ("AI · Needs approval", "#fad165", "#000000"),
+    "red": ("AI · Needs you", "#fb4c2f", "#ffffff"),
+}
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
@@ -147,10 +159,11 @@ def profile_with_token(token: str) -> dict:
 # ---------- Notifications ----------
 
 def watch(mailbox) -> dict:
-    """Ask Gmail to notify our Pub/Sub topic about INBOX changes. Lasts 7 days; the daily job renews it."""
+    """Ask Gmail to notify our Pub/Sub topic about new inbox mail and the owner's sent replies.
+    Lasts 7 days; the daily job renews it."""
     return call(mailbox, "POST", "/watch", json={
         "topicName": f"projects/{GOOGLE_PROJECT_ID}/topics/{GMAIL_PUBSUB_TOPIC}",
-        "labelIds": ["INBOX"], "labelFilterBehavior": "INCLUDE"})
+        "labelIds": ["INBOX", "SENT"], "labelFilterBehavior": "INCLUDE"})
 
 
 def stop(mailbox):
@@ -161,11 +174,11 @@ def stop(mailbox):
 
 
 def new_message_ids(mailbox, start_history_id: str):
-    """Ids of messages added to the INBOX since start_history_id, and the newest history id."""
+    """Ids of messages added since start_history_id (new inbox mail AND mail the owner sent),
+    and the newest history id. The caller looks at each message's labels to tell them apart."""
     ids, page, latest = [], None, start_history_id
     while True:
-        params = {"startHistoryId": start_history_id, "historyTypes": "messageAdded", "labelId": "INBOX",
-                  "maxResults": 100}
+        params = {"startHistoryId": start_history_id, "historyTypes": "messageAdded", "maxResults": 100}
         if page:
             params["pageToken"] = page
         d = call(mailbox, "GET", "/history?" + urlencode(params))
@@ -283,8 +296,7 @@ def to_html(text: str) -> str:
     return f"<div>{inner}</div>"  # no font styling: shows in the reader's normal mail font
 
 
-def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_reply_to="", references="",
-               automatic=False):  # noqa: ARG001  (kept for logging/learning; replies look identical either way)
+def _reply_raw(mailbox, *, to, subject, body, in_reply_to="", references=""):
     msg = EmailMessage()
     msg["To"] = to
     msg["From"] = mailbox.email_address
@@ -297,8 +309,62 @@ def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_
     # (Plain text alone gets hard-wrapped at ~70 characters by Gmail, breaking lines mid-sentence.)
     msg.set_content(body)
     msg.add_alternative(to_html(body), subtype="html")
-    raw = base64.urlsafe_b64encode(msg.as_bytes(policy=SMTP)).decode()
-    payload = {"raw": raw}
+    return base64.urlsafe_b64encode(msg.as_bytes(policy=SMTP)).decode()
+
+
+def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_reply_to="", references="",
+               automatic=False):  # noqa: ARG001  (kept for logging/learning; replies look identical either way)
+    payload = {"raw": _reply_raw(mailbox, to=to, subject=subject, body=body, in_reply_to=in_reply_to,
+                                 references=references)}
     if thread_id:
         payload["threadId"] = thread_id
     return call(mailbox, "POST", "/messages/send", json=payload)
+
+
+# ---------- Drafts and colored labels in the owner's Gmail ----------
+
+def can_draft(mailbox) -> bool:
+    """Drafts + labels need gmail.modify; older connections only have read + send."""
+    return MODIFY in (mailbox.scopes or "").split()
+
+
+def create_draft(mailbox, *, to, subject, body, thread_id=None, in_reply_to="", references="") -> str:
+    message = {"raw": _reply_raw(mailbox, to=to, subject=subject, body=body, in_reply_to=in_reply_to,
+                                 references=references)}
+    if thread_id:
+        message["threadId"] = thread_id
+    return call(mailbox, "POST", "/drafts", json={"message": message})["id"]
+
+
+def delete_draft(mailbox, draft_id: str):
+    """Remove our draft (after it was sent from the app, or rejected). Gone already = fine."""
+    try:
+        call(mailbox, "DELETE", f"/drafts/{draft_id}")
+    except GmailError as e:
+        if "(404)" not in str(e):
+            log.warning("Could not delete draft %s: %s", draft_id, e)
+
+
+def ensure_labels(mailbox) -> dict:
+    """Our three colored labels exist in the owner's Gmail; returns {"green"|"yellow"|"red": label id}."""
+    existing = {lb["name"]: lb["id"] for lb in call(mailbox, "GET", "/labels").get("labels", [])}
+    ids = {}
+    for color, (name, bg, fg) in LABELS.items():
+        if name in existing:
+            ids[color] = existing[name]
+            continue
+        ids[color] = call(mailbox, "POST", "/labels", json={
+            "name": name, "labelListVisibility": "labelShow", "messageListVisibility": "show",
+            "color": {"backgroundColor": bg, "textColor": fg}})["id"]
+    return ids
+
+
+def set_color_label(mailbox, label_ids: dict, message_id: str, color):
+    """Put exactly one of our colored labels on a message (or none, if color is None)."""
+    add = [label_ids[color]] if color and color in label_ids else []
+    remove = [i for c, i in label_ids.items() if c != color]
+    try:
+        call(mailbox, "POST", f"/messages/{message_id}/modify", json={"addLabelIds": add, "removeLabelIds": remove})
+    except GmailError as e:
+        if "(404)" not in str(e):
+            raise

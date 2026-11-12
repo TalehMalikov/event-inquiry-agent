@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import GmailConnection from "@/components/GmailConnection";
+import Notifications from "@/components/Notifications";
 import { api, Settings } from "@/lib/api";
 
 const DESCRIPTIONS: Record<string, string> = {
@@ -57,6 +58,7 @@ export default function SettingsPage() {
             </p>
           )}
           <GmailConnection canEdit={settings.can_edit} />
+          <Notifications />
 
           <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200 sm:p-5">
             <label className="text-sm font-semibold" htmlFor="company-name">Company name</label>

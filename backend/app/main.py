@@ -19,10 +19,10 @@ from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 
-from . import auth, mail_api, rag
+from . import auth, mail_api, push, rag
 from .agent import ALWAYS_RED, CATEGORIES, build_graph
 from .config import CHECKPOINT_URL, DAILY_DRAFT_LIMIT, DB_POOL_SIZE
-from .db import Company, Message, Policy, Room, SessionLocal, get_company, init_db, utcnow
+from .db import Company, Message, Policy, PushSubscription, Room, SessionLocal, get_company, init_db, utcnow
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
@@ -221,6 +221,12 @@ class Decision(BaseModel):
     text: Optional[str] = Field(None, max_length=20000)
 
 
+@api.get("/messages/{message_id}")
+def get_message(message_id: int, who: Who = Depends(current)):
+    with SessionLocal() as s:
+        return to_dict(own_message(s, who, message_id))
+
+
 @api.get("/messages")
 def list_messages(who: Who = Depends(current)):
     with SessionLocal() as s:
@@ -229,14 +235,32 @@ def list_messages(who: Who = Depends(current)):
         return [to_dict(m) for m in rows]
 
 
+def resume_message(message_id: int, decision: dict):
+    """Continue a paused run with the owner's decision. "sending" blocks a second decision meanwhile
+    (e.g. approving in the app while the mail check sees the owner pressed Send in Gmail)."""
+    with SessionLocal() as s:
+        m = s.scalar(select(Message).where(Message.id == message_id).with_for_update())
+        if m is None or m.status != "waiting":
+            raise HTTPException(409, f"Message is '{m.status if m else 'missing'}', not waiting for approval")
+        m.status = "sending"
+        thread_id = m.thread_id
+        s.commit()
+    try:
+        get_graph().invoke(Command(resume=decision), cfg(thread_id))
+    except Exception as e:  # noqa: BLE001
+        log.exception("Resume failed for message %s", message_id)
+        with SessionLocal() as s:
+            m = s.get(Message, message_id)
+            m.status, m.error = "error", str(e)[:2000]
+            s.commit()
+        raise HTTPException(500, "Something went wrong. The email is marked as failed; you can retry it.")
+    return sync_from_graph(message_id)
+
+
 def _resume(who: Who, message_id: int, decision: dict):
     with SessionLocal() as s:
-        m = own_message(s, who, message_id)
-        if m.status != "waiting":
-            raise HTTPException(409, f"Message is '{m.status}', not waiting for approval")
-        thread_id = m.thread_id
-    get_graph().invoke(Command(resume=decision), cfg(thread_id))
-    return sync_from_graph(message_id)
+        own_message(s, who, message_id)  # 404 unless it's this company's
+    return resume_message(message_id, decision)
 
 
 @api.post("/messages/{message_id}/approve")
@@ -349,8 +373,59 @@ def put_settings(body: SettingsIn, who: Who = Depends(admin)):
     return get_settings(who)
 
 
+# ---------- Phone notifications ----------
+
+class PushIn(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+    p256dh: str = Field(min_length=10, max_length=200)
+    auth: str = Field(min_length=4, max_length=100)
+
+
+@api.get("/push/key")
+def push_key(who: Who = Depends(current)):
+    from .config import VAPID_PUBLIC_KEY
+    with SessionLocal() as s:
+        mine = s.scalar(select(func.count(PushSubscription.id)).where(
+            PushSubscription.company_id == who.company_id, PushSubscription.user_id == who.ctx.user_id))
+    return {"key": VAPID_PUBLIC_KEY if push.configured() else None, "devices": mine}
+
+
+@api.post("/push/subscribe")
+def push_subscribe(body: PushIn, who: Who = Depends(current)):
+    if not body.endpoint.startswith("https://"):
+        raise HTTPException(422, "Invalid push endpoint")
+    with SessionLocal() as s:
+        sub = s.scalar(select(PushSubscription).where(PushSubscription.endpoint == body.endpoint))
+        if sub is None:
+            sub = PushSubscription(endpoint=body.endpoint)
+            s.add(sub)
+        # a device belongs to whoever subscribed it last, in the company they're working in now
+        sub.company_id, sub.user_id, sub.p256dh, sub.auth = who.company_id, who.ctx.user_id, body.p256dh, body.auth
+        s.commit()
+    return {"ok": True}
+
+
+@api.post("/push/unsubscribe")
+def push_unsubscribe(body: PushIn, who: Who = Depends(current)):
+    with SessionLocal() as s:
+        s.execute(delete(PushSubscription).where(PushSubscription.endpoint == body.endpoint,
+                                                 PushSubscription.company_id == who.company_id))
+        s.commit()
+    return {"ok": True}
+
+
+@api.post("/push/test")
+def push_test(who: Who = Depends(current)):
+    with SessionLocal() as s:
+        subs = list(s.scalars(select(PushSubscription).where(PushSubscription.company_id == who.company_id,
+                                                             PushSubscription.user_id == who.ctx.user_id)))
+    sent = push.notify(subs, title="🟡 Test notification", body="This is how emails that need you will look.",
+                       url="/", tag="test")
+    return {"sent": sent}
+
+
 mail_api.setup(current=current, admin=admin, process_message=process_message,
-               over_daily_limit=over_daily_limit, get_graph=get_graph)
+               over_daily_limit=over_daily_limit, get_graph=get_graph, resume_message=resume_message)
 mail_api.register(api)
 app.include_router(api)
 app.include_router(mail_api.router)

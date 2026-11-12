@@ -1,10 +1,14 @@
 """The traffic-light agent.
 
     START -> understand -> look_up -> draft -> traffic_light
-                                                  |-- green ----------------> send -> END
-                                                  '-- yellow/red -> owner_review (interrupt)
-                                                                     |-- approve/edit -> send -> END
-                                                                     '-- reject ------------> END
+                                                  |-- green ----------------------------> send -> END
+                                                  '-- yellow/red -> stage -> owner_review (interrupt)
+                                                                                |-- approve/edit in app -> send -> END
+                                                                                |-- sent from Gmail ---> mark_sent -> END
+                                                                                '-- reject ------------> discard -> END
+
+stage puts the draft + a colored label into the owner's Gmail and pings their phone. The owner can approve
+in our app OR just press Send in Gmail; either way the reply goes out exactly once.
 
 Every email gets a draft. The traffic light only decides: send now, or wait for the owner?
 """
@@ -37,6 +41,8 @@ def model():
 
 class EmailState(TypedDict, total=False):
     send_error: str
+    draft_ok: bool
+    sent_in_gmail: bool
     # input
     message_id: int
     company_id: int
@@ -167,11 +173,22 @@ def traffic_light(state: EmailState):
     if req["category"] not in state.get("green_categories", ["info"]):
         yellow.append(f"'{req['category']}' isn't on your auto-send list")
 
+    # Red because the draft states something wrong: never leave it ready-to-send in Gmail.
+    # (Red only for the topic, like a complaint, still gets a careful draft.)
+    draft_ok = not any(r.startswith("Draft offers") for r in red)
     if red:
-        return {"color": "red", "reasons": red + yellow}
+        return {"color": "red", "reasons": red + yellow, "draft_ok": draft_ok}
     if yellow:
         return {"color": "yellow", "reasons": yellow}
     return {"color": "green", "reasons": ["Informational reply: no price, date, or promise"]}
+
+
+def stage(state: EmailState):
+    """Before pausing: draft + colored label in the owner's Gmail, and a phone notification.
+    (Kept out of owner_review, because code before interrupt() runs again when the run resumes.)"""
+    outbox.stage(state["message_id"], state["color"], state["draft"]["reply"],
+                 make_draft=state.get("draft_ok", True))
+    return {}
 
 
 def owner_review(state: EmailState):
@@ -179,6 +196,11 @@ def owner_review(state: EmailState):
     decision = interrupt({"message_id": state["message_id"], "color": state["color"]})
     if decision["action"] == "reject":
         return {"status": "rejected"}
+    if decision["action"] == "sent_in_gmail":  # the owner pressed Send in Gmail: already delivered
+        text = (decision.get("text") or "").strip()
+        draft = state["draft"]["reply"].strip()
+        return {"final_reply": text, "status": "sent_after_approval", "sent_in_gmail": True,
+                "was_edited": _normalize(text) != _normalize(draft)}
     text = (decision.get("text") or "").strip() or state["draft"]["reply"]
     return {"final_reply": text, "status": "sent_after_approval",
             "was_edited": text != state["draft"]["reply"].strip()}
@@ -198,23 +220,43 @@ def send(state: EmailState):
 
 
 def route_by_color(state: EmailState):
-    return "send" if state["color"] == "green" else "owner_review"
+    return "send" if state["color"] == "green" else "stage"
+
+
+def mark_sent(state: EmailState):
+    outbox.mark_sent_in_gmail(state["message_id"])
+    return {}
+
+
+def discard(state: EmailState):
+    outbox.discard(state["message_id"])
+    return {}
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.split()).lower()
 
 
 def route_after_review(state: EmailState):
-    return END if state["status"] == "rejected" else "send"
+    if state["status"] == "rejected":
+        return "discard"
+    return "mark_sent" if state.get("sent_in_gmail") else "send"
 
 
 def build_graph(checkpointer):
     g = StateGraph(EmailState)
     for name, fn in [("understand", understand), ("look_up", look_up), ("draft", draft),
-                     ("traffic_light", traffic_light), ("owner_review", owner_review), ("send", send)]:
+                     ("traffic_light", traffic_light), ("stage", stage), ("owner_review", owner_review),
+                     ("send", send), ("mark_sent", mark_sent), ("discard", discard)]:
         g.add_node(name, fn)
     g.add_edge(START, "understand")
     g.add_edge("understand", "look_up")
     g.add_edge("look_up", "draft")
     g.add_edge("draft", "traffic_light")
-    g.add_conditional_edges("traffic_light", route_by_color, ["send", "owner_review"])
-    g.add_conditional_edges("owner_review", route_after_review, ["send", END])
+    g.add_conditional_edges("traffic_light", route_by_color, ["send", "stage"])
+    g.add_edge("stage", "owner_review")
+    g.add_conditional_edges("owner_review", route_after_review, ["send", "mark_sent", "discard"])
     g.add_edge("send", END)
+    g.add_edge("mark_sent", END)
+    g.add_edge("discard", END)
     return g.compile(checkpointer=checkpointer)

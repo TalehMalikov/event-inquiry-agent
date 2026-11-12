@@ -25,7 +25,7 @@ log = logging.getLogger("mail")
 router = APIRouter(prefix="/api")
 
 # Set by main.setup_mail() (avoids a circular import with main.py)
-current = admin = process_message = over_daily_limit = get_graph = None
+current = admin = process_message = over_daily_limit = get_graph = resume_message = None
 
 
 def setup(**deps):
@@ -43,7 +43,7 @@ def status_dict(mb):
             "status": mb.status, "last_error": mb.last_error,
             "last_synced_at": mb.last_synced_at.isoformat() if mb.last_synced_at else None,
             "watch_expires_at": mb.watch_expires_at.isoformat() if mb.watch_expires_at else None,
-            "instant": gmail.push_enabled()}
+            "instant": gmail.push_enabled(), "can_draft": gmail.can_draft(mb)}
 
 
 def _mailbox_of(s, company_id):
@@ -52,12 +52,13 @@ def _mailbox_of(s, company_id):
 
 # ---------- Ingest: Gmail -> our database ----------
 
-def ingest(mailbox_id: int) -> list[int]:
-    """Save new inbox emails for one mailbox and return the ids of those the agent should process.
+def ingest(mailbox_id: int):
+    """Save new inbox emails for one mailbox. Returns (ids the agent should process,
+    [(waiting message id, text)] for replies the owner sent from Gmail).
 
     The mailbox row is locked for the whole step, so two notifications arriving together can't
     process the same emails twice (and the unique (mailbox, gmail id) key is a second guard)."""
-    created = []
+    created, owner_sent = [], []
     with SessionLocal() as s:
         mb = s.scalar(select(Mailbox).where(Mailbox.id == mailbox_id).with_for_update())
         if mb is None:
@@ -69,8 +70,10 @@ def ingest(mailbox_id: int) -> list[int]:
                 ids, latest = gmail.recent_inbox_ids(mb), gmail.call(mb, "GET", "/profile")["historyId"]
             seen = set(s.scalars(select(Message.external_id).where(Message.mailbox_id == mb.id,
                                                                    Message.external_id.in_(ids)))) if ids else set()
+            ours = set(s.scalars(select(Message.sent_external_id).where(Message.mailbox_id == mb.id,
+                                                                        Message.sent_external_id.in_(ids)))) if ids else set()
             for gid in ids:
-                if gid in seen:
+                if gid in seen or gid in ours:
                     continue
                 try:
                     e = gmail.fetch(mb, gid)
@@ -78,6 +81,14 @@ def ingest(mailbox_id: int) -> list[int]:
                     if "404" in str(err):  # deleted before we got to it
                         continue
                     raise
+                if "SENT" in e["labels"]:
+                    # The owner replied from Gmail (e.g. pressed Send on our draft) in a thread that waits for them
+                    w = s.scalar(select(Message).where(Message.mailbox_id == mb.id, Message.status == "waiting",
+                                                       Message.external_thread_id == e["thread_id"])
+                                 .order_by(Message.id.desc()).limit(1))
+                    if w is not None:
+                        owner_sent.append((w.id, e["body"]))
+                    continue
                 if reason := gmail.skip_reason(e, mb.email_address):
                     log.info("Skipping %s from %s: %s", gid, e["from_email"], reason)
                     continue
@@ -102,14 +113,19 @@ def ingest(mailbox_id: int) -> list[int]:
                 m2.status, m2.last_error = "error", str(err)[:1000]
                 s2.commit()
             log.warning("Ingest failed for mailbox %s: %s", mailbox_id, err)
-    return created
+    return created, owner_sent
 
 
 def ingest_and_process(mailbox_id: int) -> int:
-    ids = ingest(mailbox_id)
+    ids, owner_sent = ingest(mailbox_id)
+    for message_id, text in owner_sent:
+        try:
+            resume_message(message_id, {"action": "sent_in_gmail", "text": text})
+        except HTTPException:
+            pass  # already handled in the app meanwhile
     for mid in ids:
         process_message(mid)
-    return len(ids)
+    return len(ids) + len(owner_sent)
 
 
 # ---------- Connect / disconnect (company admins) ----------
@@ -169,6 +185,8 @@ def register(app_router: APIRouter):
                              refresh_token_enc="")
                 s.add(mb)
             mb.refresh_token_enc = gmail.encrypt(tokens["refresh_token"])
+            mb.scopes = tokens.get("scope", "")
+            mb.label_ids = None  # re-check our colored labels on the next use
             s.flush()
             gmail.forget(mb.id)
             # Start from "now": earlier emails are not answered

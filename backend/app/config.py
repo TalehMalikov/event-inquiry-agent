@@ -36,6 +36,10 @@ GMAIL_PUBSUB_TOPIC = os.getenv("GMAIL_PUBSUB_TOPIC", "")
 GMAIL_PUSH_TOKEN = os.getenv("GMAIL_PUSH_TOKEN", "")
 MAILBOX_ENCRYPTION_KEY = os.getenv("MAILBOX_ENCRYPTION_KEY", "")
 APP_URL = os.getenv("APP_URL", "http://localhost:3000").rstrip("/")
+# Phone notifications (Web Push / VAPID). Private key = base64 of the PEM.
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "https://events.tmalikov.com")
 # Vercel sends "Authorization: Bearer <CRON_SECRET>" to scheduled jobs
 CRON_SECRET = os.getenv("CRON_SECRET", "")
 # Serverless hosts run many small copies of the app, so keep each one's DB connections few

@@ -95,6 +95,10 @@ gmail.new_message_ids = lambda mb, start: ([m["id"] for hid, m in G.inbox.get(mb
                                            str(G.history))
 gmail.fetch = lambda mb, gid: next(m for _, m in G.inbox[mb.email_address] if m["id"] == gid)
 gmail.send_reply = lambda mb, **kw: G.sent.append({"from": mb.email_address, **kw})
+gmail.ensure_labels = lambda mb: {"green": "LG", "yellow": "LY", "red": "LR"}  # drafts/labels: see test_drafts.py
+gmail.set_color_label = lambda mb, ids, mid, color: None
+gmail.create_draft = lambda mb, **kw: "d1"
+gmail.delete_draft = lambda mb, did: None
 
 
 def token(org, user="user_1", role="org:admin", azp="http://localhost:3000", **extra):

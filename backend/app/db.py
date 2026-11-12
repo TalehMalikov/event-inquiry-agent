@@ -66,6 +66,20 @@ class Mailbox(Base):
     status: Mapped[str] = mapped_column(String(20), default="ok")  # ok | error
     last_error: Mapped[Optional[str]] = mapped_column(Text)
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    scopes: Mapped[Optional[str]] = mapped_column(Text)  # what the owner allowed (drafts need gmail.modify)
+    label_ids: Mapped[Optional[dict]] = mapped_column(JSON)  # our colored labels in their Gmail
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PushSubscription(Base):
+    """A phone/browser that gets a notification when an email needs the owner."""
+    __tablename__ = "push_subscriptions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    user_id: Mapped[str] = mapped_column(String(64))
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200))
+    auth: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -82,6 +96,8 @@ class Message(Base):
     rfc_message_id: Mapped[Optional[str]] = mapped_column(Text)  # for In-Reply-To, so replies stay in the thread
     email_references: Mapped[Optional[str]] = mapped_column(Text)
     reply_to: Mapped[Optional[str]] = mapped_column(String(320))
+    draft_external_id: Mapped[Optional[str]] = mapped_column(String(128))  # our draft in the owner's Gmail
+    sent_external_id: Mapped[Optional[str]] = mapped_column(String(128))  # the reply that went out
     thread_id: Mapped[str] = mapped_column(String(64), unique=True)  # LangGraph thread
     from_name: Mapped[str] = mapped_column(String(200))
     from_email: Mapped[str] = mapped_column(String(320))
@@ -133,6 +149,10 @@ MIGRATIONS = [
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS email_references TEXT",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to VARCHAR(320)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_message_per_mailbox ON messages (mailbox_id, external_id)",
+    "ALTER TABLE mailboxes ADD COLUMN IF NOT EXISTS scopes TEXT",
+    "ALTER TABLE mailboxes ADD COLUMN IF NOT EXISTS label_ids JSON",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS draft_external_id VARCHAR(128)",
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS sent_external_id VARCHAR(128)",
 ]
 
 

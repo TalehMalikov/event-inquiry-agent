@@ -12,6 +12,9 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 export const metadata: Metadata = {
   title: "Event Inquiry Agent",
   description: "AI drafts every reply. You approve what matters.",
+  // Installed on an iPhone home screen: full-screen app with our icon (needed for notifications on iOS)
+  appleWebApp: { capable: true, title: "Inbox AI", statusBarStyle: "default" },
+  icons: { apple: "/apple-touch-icon.png" },
 };
 
 export const viewport: Viewport = {

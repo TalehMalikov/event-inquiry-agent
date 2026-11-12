@@ -1,6 +1,7 @@
 export type Color = "green" | "yellow" | "red";
 export type Status =
   | "processing"
+  | "sending"
   | "waiting"
   | "sent_automatically"
   | "sent_after_approval"
@@ -97,7 +98,10 @@ export type MailStatus = {
   last_synced_at?: string | null;
   watch_expires_at?: string | null;
   instant?: boolean; // true = Gmail push (seconds); false = checked every 15 s while open, every 15 min otherwise
+  can_draft?: boolean; // false = connected before drafts/labels existed: Reconnect to enable them
 };
+
+export type PushSub = { endpoint: string; p256dh: string; auth: string };
 
 export const api = {
   gmail: () => request<MailStatus>("/gmail"),
@@ -107,6 +111,12 @@ export const api = {
   disconnectGmail: () => request<MailStatus>("/gmail", { method: "DELETE" }),
   syncGmail: () => request<MailStatus & { new: number }>("/gmail/sync", { method: "POST" }),
   messages: () => request<Message[]>("/messages"),
+  message: (id: number) => request<Message>(`/messages/${id}`),
+  pushKey: () => request<{ key: string | null; devices: number }>("/push/key"),
+  pushSubscribe: (s: PushSub) => request<{ ok: boolean }>("/push/subscribe", { method: "POST", body: JSON.stringify(s) }),
+  pushUnsubscribe: (s: PushSub) =>
+    request<{ ok: boolean }>("/push/unsubscribe", { method: "POST", body: JSON.stringify(s) }),
+  pushTest: () => request<{ sent: number }>("/push/test", { method: "POST" }),
   approve: (id: number, text: string) =>
     request<Message>(`/messages/${id}/approve`, { method: "POST", body: JSON.stringify({ text }) }),
   reject: (id: number) => request<Message>(`/messages/${id}/reject`, { method: "POST" }),
@@ -129,6 +139,7 @@ export const COLOR_STYLES: Record<Color, { dot: string; chip: string; label: str
 
 export const STATUS_LABELS: Record<Status, string> = {
   processing: "AI is drafting…",
+  sending: "Sending…",
   waiting: "Waiting for you",
   sent_automatically: "Sent automatically",
   sent_after_approval: "Sent after your approval",

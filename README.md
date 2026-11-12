@@ -65,6 +65,10 @@ Notes: the backend sets itself up on first request (tables, demo data, embedding
 
 **Email (Gmail):** each company connects its Gmail in Settings (Google OAuth, read + send only; tokens encrypted). New mail is fetched by `GET /api/cron/gmail`: an Upstash QStash schedule (Vercel Marketplace) calls it every 15 minutes, the inbox page checks every 15 seconds while open, and Vercel Cron runs it daily as a backup. Instant Gmail push via Google Pub/Sub is built in but off (it needs a Google billing account): set `GMAIL_PUBSUB_TOPIC` to turn it on.
 
+**Approving:** yellow/red replies wait as a **draft in the Gmail thread** with a colored label (`AI · Needs approval` / `AI · Needs you`; sent ones get `AI · Sent`). The owner presses Send in Gmail, or approves in the app; the app notices either way and the reply goes out once. Red replies that state a wrong fact get no draft. Customers only ever receive the reply text.
+
+**Phone notifications:** the site is an installable app (manifest + service worker). Settings → Phone notifications turns on Web Push pings like "🟡 Mike: Party for 40"; tapping opens a one-screen approve page (`/m/<id>`). On iPhone, add the site to the Home Screen first.
+
 Docker Compose still works for any other host (the backend refuses to start without Clerk configured).
 
 ## Not yet
