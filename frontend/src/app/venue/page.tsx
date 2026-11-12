@@ -62,7 +62,7 @@ export default function VenuePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Venue data</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Company data</h1>
         <p className="text-sm text-slate-500">
           The AI answers only from these facts. Change a number here and the next reply uses it.
         </p>

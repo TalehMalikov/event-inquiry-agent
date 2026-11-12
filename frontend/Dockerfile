@@ -7,6 +7,9 @@ COPY . .
 # Rewrites (/api -> backend) are baked in at build time
 ARG BACKEND_URL=http://backend:8000
 ENV BACKEND_URL=$BACKEND_URL
+# Clerk's publishable key is public and gets baked into the browser code
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 RUN npm run build
 
 # Run stage: Next.js standalone server

@@ -1,7 +1,7 @@
 name: venue-inbox
 
 # Local dev:   docker compose up -d db          (then run backend + frontend yourself)
-# Everything:  docker compose up -d --build     (app on http://localhost:3000)
+# Everything:  docker compose --env-file frontend/.env.local --profile full up -d --build   (http://localhost:3000)
 
 services:
   db:
@@ -34,6 +34,8 @@ services:
       context: ./frontend
       args:
         BACKEND_URL: http://backend:8000
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+    env_file: ./frontend/.env.local   # Clerk keys (vercel env pull, or copy from the Clerk dashboard)
     ports:
       - "3000:3000"
     depends_on: [backend]

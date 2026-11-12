@@ -38,8 +38,8 @@ def model():
 class EmailState(TypedDict, total=False):
     # input
     message_id: int
-    venue_id: int
-    venue_name: str
+    company_id: int
+    company_name: str
     green_categories: list
     from_name: str
     from_email: str
@@ -96,15 +96,15 @@ def look_up(state: EmailState):
     with SessionLocal() as s:
         rooms = [
             {"name": r.name, "capacity": r.capacity, "weekday_min": r.weekday_min, "weekend_min": r.weekend_min}
-            for r in s.scalars(select(Room).where(Room.venue_id == state["venue_id"]).order_by(Room.capacity.desc()))
+            for r in s.scalars(select(Room).where(Room.company_id == state["company_id"]).order_by(Room.capacity.desc()))
         ]
-        policies = rag.search(s, state["venue_id"], f"{state['subject']}\n{state['email']}")
+        policies = rag.search(s, state["company_id"], f"{state['subject']}\n{state['email']}")
     return {"rooms": rooms, "policies": policies}
 
 
 DRAFT_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
-     "You write email replies for {venue_name}, an event venue. Be warm, concise, and professional.\n"
+     "You write email replies for {company_name}, an event venue. Be warm, concise, and professional.\n"
      "Use ONLY the facts below. Never invent prices, capacities, availability, or policies. "
      "If a needed fact is missing, say you'll check with the team and get back to them.\n"
      "If the request doesn't fit (too many guests, budget below the minimum), say so kindly and "
@@ -112,7 +112,7 @@ DRAFT_PROMPT = ChatPromptTemplate.from_messages([
      "Never confirm a booking yourself; say the team will confirm.\n"
      "For complaints or refund requests, apologize sincerely and say the team will follow up personally. "
      "Never promise OR refuse a refund or compensation; that is the owner's decision.\n"
-     "Sign off as 'The {venue_name} team'.\n\n"
+     "Sign off as 'The {company_name} team'.\n\n"
      "ROOMS:\n{rooms}\n\nPOLICIES:\n{policies}"),
     ("human", "From: {from_name}\nSubject: {subject}\n\n{email}"),
 ])
@@ -126,7 +126,7 @@ def draft(state: EmailState):
     ) or "- (no rooms on file)"
     chain = DRAFT_PROMPT | model().with_structured_output(Draft)
     result = chain.invoke({
-        "venue_name": state["venue_name"],
+        "company_name": state["company_name"],
         "rooms": rooms_text,
         "policies": "\n".join(f"- {p}" for p in state["policies"]) or "- (none)",
         "from_name": state["from_name"],

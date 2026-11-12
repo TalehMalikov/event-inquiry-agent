@@ -1,23 +1,28 @@
-"""FastAPI server: receives emails, runs the agent, and serves the owner's web app."""
+"""FastAPI server: receives emails, runs the agent, and serves each company's web app.
+
+Multi-company rule: every query filters by the company from the login token, never from user input."""
 import logging
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from datetime import time as dtime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from . import auth, rag
 from .agent import ALWAYS_RED, CATEGORIES, build_graph
-from .config import CHECKPOINT_URL, DB_POOL_SIZE
-from .db import Message, Policy, Room, SessionLocal, get_venue, init_db, utcnow
+from .config import CHECKPOINT_URL, DAILY_DRAFT_LIMIT, DB_POOL_SIZE
+from .db import Company, Message, Policy, Room, SessionLocal, get_company, init_db, utcnow
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
@@ -62,7 +67,7 @@ def get_graph():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    auth.check_config()  # never run without a password, even for a moment
+    auth.check_config()  # never run without login configured, even for a moment
     try:
         get_graph()  # warm up; if it fails, the first request tries again and shows the error
     except Exception:  # noqa: BLE001
@@ -72,12 +77,37 @@ async def lifespan(app: FastAPI):
         _pool.close()
 
 
-def ready():
+# ---------- Who is calling (user + company) ----------
+
+@dataclass
+class Who:
+    ctx: auth.Ctx
+    company_id: int
+
+
+def current(ctx: auth.Ctx = Depends(auth.require_user)) -> Who:
+    """The logged-in user and their company. A company's row is created on its first visit."""
     get_graph()
+    with SessionLocal() as s:
+        company = s.scalar(select(Company).where(Company.clerk_org_id == ctx.org_id))
+        if company is None:
+            company = get_company(s, ctx.org_id, auth.org_name(ctx.org_id))
+        return Who(ctx=ctx, company_id=company.id)
+
+
+def admin(who: Who = Depends(current)) -> Who:
+    if not who.ctx.is_admin:
+        raise HTTPException(403, "Only company admins can change this")
+    return who
 
 
 app = FastAPI(title="Event Inquiry Agent API", lifespan=lifespan, docs_url=None, redoc_url=None)
-owner = APIRouter(prefix="/api", dependencies=[Depends(auth.require_owner), Depends(ready)])
+api = APIRouter(prefix="/api")
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
 
 
 def cfg(thread_id):
@@ -95,32 +125,19 @@ def to_dict(m: Message):
     }
 
 
-# ---------- Public: login ----------
-
-class LoginIn(BaseModel):
-    password: str
-
-
-@app.post("/api/login")
-def login(body: LoginIn, response: Response):
-    auth.login(body.password, response)
-    return {"ok": True}
+def own_message(s, who: Who, message_id: int) -> Message:
+    """A message only if it belongs to the caller's company. Otherwise 404, so other companies' ids reveal nothing."""
+    m = s.scalar(select(Message).where(Message.id == message_id, Message.company_id == who.company_id))
+    if not m:
+        raise HTTPException(404, "Message not found")
+    return m
 
 
-@app.post("/api/logout")
-def logout(response: Response):
-    auth.logout(response)
-    return {"ok": True}
-
-
-@app.get("/api/me")
-def me(request: Request):
-    return {"logged_in": auth.is_logged_in(request)}
-
-
-@app.get("/api/health")
-def health():
-    return {"ok": True}
+@api.get("/me")
+def me(who: Who = Depends(current)):
+    with SessionLocal() as s:
+        c = s.get(Company, who.company_id)
+        return {"company": c.name, "role": who.ctx.role, "daily_limit": DAILY_DRAFT_LIMIT}
 
 
 # ---------- Running the agent ----------
@@ -150,10 +167,10 @@ def sync_from_graph(message_id: int):
 def process_message(message_id: int):
     with SessionLocal() as s:
         m = s.get(Message, message_id)
-        venue = get_venue(s)
+        company = s.get(Company, m.company_id)
         inputs = {
-            "message_id": m.id, "venue_id": venue.id, "venue_name": venue.name,
-            "green_categories": venue.green_categories, "from_name": m.from_name,
+            "message_id": m.id, "company_id": company.id, "company_name": company.name,
+            "green_categories": company.green_categories, "from_name": m.from_name,
             "from_email": m.from_email, "subject": m.subject, "email": m.body,
         }
         thread_id = m.thread_id
@@ -166,6 +183,15 @@ def process_message(message_id: int):
             m = s.get(Message, message_id)
             m.status, m.error = "error", str(e)[:2000]
             s.commit()
+
+
+def check_daily_limit(s, company_id: int):
+    """Each company can create at most DAILY_DRAFT_LIMIT AI drafts per UTC day (protects the OpenAI bill)."""
+    start = datetime.combine(datetime.now(timezone.utc).date(), dtime.min, tzinfo=timezone.utc)
+    used = s.scalar(select(func.count(Message.id)).where(Message.company_id == company_id,
+                                                         Message.received_at >= start))
+    if used >= DAILY_DRAFT_LIMIT:
+        raise HTTPException(429, f"Daily limit reached ({DAILY_DRAFT_LIMIT} AI drafts per day). Try again tomorrow.")
 
 
 # ---------- Messages ----------
@@ -181,21 +207,23 @@ class Decision(BaseModel):
     text: Optional[str] = Field(None, max_length=20000)
 
 
-@owner.get("/messages")
-def list_messages():
+@api.get("/messages")
+def list_messages(who: Who = Depends(current)):
     with SessionLocal() as s:
-        rows = s.scalars(select(Message).order_by(Message.received_at.desc()).limit(200))
+        rows = s.scalars(select(Message).where(Message.company_id == who.company_id)
+                         .order_by(Message.received_at.desc()).limit(200))
         return [to_dict(m) for m in rows]
 
 
-@owner.post("/messages/simulate")
-def simulate_email(email: IncomingEmail):
-    """Stand-in for a real inbox until Outlook is connected.
+@api.post("/messages/simulate")
+def simulate_email(email: IncomingEmail, who: Who = Depends(current)):
+    """Stand-in for a real inbox until email is connected.
 
     The agent runs before we reply (~5-10 s): serverless hosts may stop work left running after the response."""
     with SessionLocal() as s:
-        venue = get_venue(s)
-        m = Message(venue_id=venue.id, thread_id=str(uuid.uuid4()), status="processing", **email.model_dump())
+        check_daily_limit(s, who.company_id)
+        m = Message(company_id=who.company_id, thread_id=str(uuid.uuid4()), status="processing",
+                    **email.model_dump())
         s.add(m)
         s.commit()
         message_id = m.id
@@ -204,11 +232,9 @@ def simulate_email(email: IncomingEmail):
         return to_dict(s.get(Message, message_id))
 
 
-def _resume(message_id: int, decision: dict):
+def _resume(who: Who, message_id: int, decision: dict):
     with SessionLocal() as s:
-        m = s.get(Message, message_id)
-        if not m:
-            raise HTTPException(404, "Message not found")
+        m = own_message(s, who, message_id)
         if m.status != "waiting":
             raise HTTPException(409, f"Message is '{m.status}', not waiting for approval")
         thread_id = m.thread_id
@@ -216,21 +242,21 @@ def _resume(message_id: int, decision: dict):
     return sync_from_graph(message_id)
 
 
-@owner.post("/messages/{message_id}/approve")
-def approve(message_id: int, body: Decision):
-    return _resume(message_id, {"action": "approve", "text": body.text})
+@api.post("/messages/{message_id}/approve")
+def approve(message_id: int, body: Decision, who: Who = Depends(current)):
+    return _resume(who, message_id, {"action": "approve", "text": body.text})
 
 
-@owner.post("/messages/{message_id}/reject")
-def reject(message_id: int):
-    return _resume(message_id, {"action": "reject"})
+@api.post("/messages/{message_id}/reject")
+def reject(message_id: int, who: Who = Depends(current)):
+    return _resume(who, message_id, {"action": "reject"})
 
 
-@owner.post("/messages/{message_id}/retry")
-def retry(message_id: int):
+@api.post("/messages/{message_id}/retry")
+def retry(message_id: int, who: Who = Depends(current)):
     with SessionLocal() as s:
-        m = s.get(Message, message_id)
-        if not m or m.status != "error":
+        m = own_message(s, who, message_id)
+        if m.status != "error":
             raise HTTPException(409, "Only failed messages can be retried")
         m.status, m.error, m.thread_id = "processing", None, str(uuid.uuid4())
         s.commit()
@@ -238,7 +264,7 @@ def retry(message_id: int):
     return {"ok": True}
 
 
-# ---------- Venue data ----------
+# ---------- Company data: facts, knowledge, rules (admins edit, everyone in the company reads) ----------
 
 class RoomIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -252,76 +278,72 @@ class PolicyIn(BaseModel):
 
 
 class SettingsIn(BaseModel):
-    venue_name: str = Field(min_length=1, max_length=200)
+    company_name: str = Field(min_length=1, max_length=200)
     green_categories: list[str]
 
 
-@owner.get("/rooms")
-def get_rooms():
+@api.get("/rooms")
+def get_rooms(who: Who = Depends(current)):
     with SessionLocal() as s:
-        venue = get_venue(s)
-        rows = s.scalars(select(Room).where(Room.venue_id == venue.id).order_by(Room.capacity.desc()))
+        rows = s.scalars(select(Room).where(Room.company_id == who.company_id).order_by(Room.capacity.desc()))
         return [{"id": r.id, "name": r.name, "capacity": r.capacity,
                  "weekday_min": r.weekday_min, "weekend_min": r.weekend_min} for r in rows]
 
 
-@owner.put("/rooms")
-def put_rooms(rooms: list[RoomIn]):
+@api.put("/rooms")
+def put_rooms(rooms: list[RoomIn], who: Who = Depends(admin)):
     with SessionLocal() as s:
-        venue = get_venue(s)
-        s.execute(delete(Room).where(Room.venue_id == venue.id))
+        s.execute(delete(Room).where(Room.company_id == who.company_id))
         for r in rooms:
-            s.add(Room(venue_id=venue.id, **r.model_dump()))
+            s.add(Room(company_id=who.company_id, **r.model_dump()))
         s.commit()
-    return get_rooms()
+    return get_rooms(who)
 
 
-@owner.get("/policies")
-def get_policies():
+@api.get("/policies")
+def get_policies(who: Who = Depends(current)):
     with SessionLocal() as s:
-        venue = get_venue(s)
-        rows = s.scalars(select(Policy).where(Policy.venue_id == venue.id).order_by(Policy.id))
+        rows = s.scalars(select(Policy).where(Policy.company_id == who.company_id).order_by(Policy.id))
         return [{"id": p.id, "text": p.text, "indexed": p.embedding is not None} for p in rows]
 
 
-@owner.post("/policies")
-def add_policy(p: PolicyIn):
+@api.post("/policies")
+def add_policy(p: PolicyIn, who: Who = Depends(admin)):
     vectors = rag.try_embed([p.text])
     with SessionLocal() as s:
-        venue = get_venue(s)
-        s.add(Policy(venue_id=venue.id, text=p.text, embedding=vectors[0] if vectors else None))
+        s.add(Policy(company_id=who.company_id, text=p.text, embedding=vectors[0] if vectors else None))
         s.commit()
-    return get_policies()
+    return get_policies(who)
 
 
-@owner.delete("/policies/{policy_id}")
-def delete_policy(policy_id: int):
+@api.delete("/policies/{policy_id}")
+def delete_policy(policy_id: int, who: Who = Depends(admin)):
     with SessionLocal() as s:
-        venue = get_venue(s)
-        s.execute(delete(Policy).where(Policy.id == policy_id, Policy.venue_id == venue.id))
+        s.execute(delete(Policy).where(Policy.id == policy_id, Policy.company_id == who.company_id))
         s.commit()
-    return get_policies()
+    return get_policies(who)
 
 
-@owner.get("/settings")
-def get_settings():
+@api.get("/settings")
+def get_settings(who: Who = Depends(current)):
     with SessionLocal() as s:
-        v = get_venue(s)
-        return {"venue_name": v.name, "green_categories": v.green_categories,
-                "all_categories": [c for c in CATEGORIES if c not in ALWAYS_RED]}
+        c = s.get(Company, who.company_id)
+        return {"company_name": c.name, "green_categories": c.green_categories,
+                "all_categories": [x for x in CATEGORIES if x not in ALWAYS_RED],
+                "can_edit": who.ctx.is_admin}
 
 
-@owner.put("/settings")
-def put_settings(body: SettingsIn):
+@api.put("/settings")
+def put_settings(body: SettingsIn, who: Who = Depends(admin)):
     allowed = set(CATEGORIES) - ALWAYS_RED
     bad = set(body.green_categories) - allowed
     if bad:
         raise HTTPException(422, f"Not allowed on the auto-send list: {sorted(bad)}")
     with SessionLocal() as s:
-        v = get_venue(s)
-        v.name, v.green_categories = body.venue_name, body.green_categories
+        c = s.get(Company, who.company_id)
+        c.name, c.green_categories = body.company_name, body.green_categories
         s.commit()
-    return get_settings()
+    return get_settings(who)
 
 
-app.include_router(owner)
+app.include_router(api)

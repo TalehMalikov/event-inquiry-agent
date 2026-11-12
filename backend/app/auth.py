@@ -1,52 +1,94 @@
-"""Owner login: one password per deployment, kept in a signed HttpOnly cookie."""
-import hmac
-import time
+"""Login via Clerk. Users sign up/in on the frontend; every API call carries Clerk's signed session token.
 
-from fastapi import HTTPException, Request, Response
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+We verify the token ourselves (Clerk's public keys, no network call per request) and read which
+company (Clerk "organization") the user is working in. The company always comes from the token,
+never from the request body or URL, so one company can never reach another company's data."""
+import base64
+import logging
+from dataclasses import dataclass
+from functools import lru_cache
 
-from .config import COOKIE_SECURE, OWNER_PASSWORD, SESSION_DAYS, SESSION_SECRET
+import httpx
+import jwt
+from fastapi import HTTPException, Request
 
-COOKIE = "vi_session"
-MAX_AGE = SESSION_DAYS * 24 * 3600
+from .config import CLERK_AUTHORIZED_PARTIES, CLERK_PUBLISHABLE_KEY, CLERK_SECRET_KEY
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class Ctx:
+    user_id: str
+    org_id: str
+    role: str  # "admin" or "member"
+
+    @property
+    def is_admin(self):
+        return self.role == "admin"
 
 
 def check_config():
-    """Refuse to start without real credentials, so the app is never deployed unprotected."""
-    if not OWNER_PASSWORD or OWNER_PASSWORD == "change-me":
-        raise RuntimeError("Set OWNER_PASSWORD in backend/.env")
-    if len(SESSION_SECRET) < 32 or SESSION_SECRET.startswith("change-me"):
-        raise RuntimeError("Set SESSION_SECRET in backend/.env to a random string of 32+ characters")
+    if not CLERK_PUBLISHABLE_KEY.startswith(("pk_test_", "pk_live_")):
+        raise RuntimeError("Set CLERK_PUBLISHABLE_KEY (from the Clerk dashboard / Vercel)")
 
 
-def _serializer():
-    return URLSafeTimedSerializer(SESSION_SECRET, salt="owner-session")
+def _frontend_api():
+    """The publishable key is base64 of Clerk's Frontend API host, e.g. 'xyz.clerk.accounts.dev$'."""
+    enc = CLERK_PUBLISHABLE_KEY.split("_", 2)[2]
+    return base64.b64decode(enc + "=" * (-len(enc) % 4)).decode().rstrip("$")
 
 
-def login(password: str, response: Response):
-    if not hmac.compare_digest(password.encode(), OWNER_PASSWORD.encode()):
-        time.sleep(0.5)  # slow down password guessing
-        raise HTTPException(401, "Wrong password")
-    token = _serializer().dumps({"role": "owner"})
-    response.set_cookie(COOKIE, token, max_age=MAX_AGE, httponly=True, samesite="lax",
-                        secure=COOKIE_SECURE, path="/")
+@lru_cache(maxsize=1)
+def _jwks():
+    return jwt.PyJWKClient(f"https://{_frontend_api()}/.well-known/jwks.json", cache_keys=True)
 
 
-def logout(response: Response):
-    response.delete_cookie(COOKIE, path="/")
+def _token(request: Request):
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return request.cookies.get("__session")
 
 
-def is_logged_in(request: Request) -> bool:
-    token = request.cookies.get(COOKIE)
-    if not token:
-        return False
+def _verify(token: str) -> dict:
     try:
-        return _serializer().loads(token, max_age=MAX_AGE).get("role") == "owner"
-    except (BadSignature, SignatureExpired):
-        return False
-
-
-def require_owner(request: Request):
-    """FastAPI dependency for every owner-only endpoint."""
-    if not is_logged_in(request):
+        key = _jwks().get_signing_key_from_jwt(token).key
+        claims = jwt.decode(token, key, algorithms=["RS256"], leeway=10,
+                            options={"require": ["exp", "iat", "sub"]})
+    except jwt.PyJWTError as e:
+        raise HTTPException(401, "Not logged in") from e
+    azp = claims.get("azp")  # the site the token was issued for (absent on server-minted tokens)
+    if CLERK_AUTHORIZED_PARTIES and azp and azp not in CLERK_AUTHORIZED_PARTIES:
         raise HTTPException(401, "Not logged in")
+    if claims.get("sts") == "pending":  # signed in but hasn't finished a required step (choosing a company)
+        raise HTTPException(403, "Choose or create a company first")
+    return claims
+
+
+def require_user(request: Request) -> Ctx:
+    """FastAPI dependency: a logged-in user working inside a company."""
+    token = _token(request)
+    if not token:
+        raise HTTPException(401, "Not logged in")
+    claims = _verify(token)
+    org = claims.get("o") or {}  # session token v2
+    org_id = org.get("id") or claims.get("org_id")  # v1 fallback
+    if not org_id:
+        raise HTTPException(403, "Choose or create a company first")
+    role = (org.get("rol") or claims.get("org_role") or "member").removeprefix("org:")
+    return Ctx(user_id=claims["sub"], org_id=org_id, role=role)
+
+
+def org_name(org_id: str) -> str:
+    """Company name from Clerk, used once when we first see a company."""
+    if not CLERK_SECRET_KEY:
+        return "My company"
+    try:
+        r = httpx.get(f"https://api.clerk.com/v1/organizations/{org_id}",
+                      headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"}, timeout=5)
+        r.raise_for_status()
+        return r.json().get("name") or "My company"
+    except Exception as e:  # noqa: BLE001
+        log.warning("Could not fetch organization name: %s", e)
+        return "My company"

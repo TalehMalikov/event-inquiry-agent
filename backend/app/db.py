@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, create_engine, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from .config import DATABASE_URL, DB_POOL_SIZE, EMBED_DIM
@@ -22,10 +23,13 @@ class Base(DeclarativeBase):
     pass
 
 
-class Venue(Base):
-    __tablename__ = "venues"
+class Company(Base):
+    """One customer company (a Clerk organization). Every other table belongs to exactly one company."""
+    __tablename__ = "companies"
     id: Mapped[int] = mapped_column(primary_key=True)
+    clerk_org_id: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     # Categories the owner lets the AI send without approval
     green_categories: Mapped[list] = mapped_column(JSON, default=lambda: ["info"])
 
@@ -33,7 +37,7 @@ class Venue(Base):
 class Room(Base):
     __tablename__ = "rooms"
     id: Mapped[int] = mapped_column(primary_key=True)
-    venue_id: Mapped[int] = mapped_column(ForeignKey("venues.id"))
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     capacity: Mapped[int] = mapped_column(Integer)
     weekday_min: Mapped[int] = mapped_column(Integer)
@@ -44,7 +48,7 @@ class Policy(Base):
     """Text knowledge (hours, parking, deposits...). Searched by meaning with pgvector."""
     __tablename__ = "policies"
     id: Mapped[int] = mapped_column(primary_key=True)
-    venue_id: Mapped[int] = mapped_column(ForeignKey("venues.id"))
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[Optional[Any]] = mapped_column(Vector(EMBED_DIM), nullable=True)
 
@@ -53,7 +57,7 @@ class Message(Base):
     """One customer email and what happened to it."""
     __tablename__ = "messages"
     id: Mapped[int] = mapped_column(primary_key=True)
-    venue_id: Mapped[int] = mapped_column(ForeignKey("venues.id"))
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     thread_id: Mapped[str] = mapped_column(String(64), unique=True)  # LangGraph thread
     from_name: Mapped[str] = mapped_column(String(200))
     from_email: Mapped[str] = mapped_column(String(320))
@@ -76,7 +80,7 @@ class Message(Base):
     was_edited: Mapped[Optional[bool]] = mapped_column(default=None)  # data for "learning over time"
 
 
-# ---------- Setup and demo data ----------
+# ---------- Setup and example data (event-venue template for new companies) ----------
 
 DEMO_ROOMS = [
     ("Main Hall", 60, 500, 800),
@@ -93,29 +97,39 @@ DEMO_POLICIES = [
 ]
 
 
+# Tables from the single-venue version. Dropped once so the multi-company tables can replace them.
+LEGACY_TABLES = ["messages", "policies", "rooms", "venues"]
+
+
 def init_db():
-    """Create tables and demo data. Safe when several app copies start at once (serverless):
+    """Create tables. Safe when several app copies start at once (serverless):
     a transaction-scoped lock makes them take turns, and later ones see the work is done."""
     with engine.begin() as conn:
         conn.execute(text("SELECT pg_advisory_xact_lock(724001)"))
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        if conn.execute(text("SELECT to_regclass('venues')")).scalar():
+            for t in LEGACY_TABLES:
+                conn.execute(text(f"DROP TABLE IF EXISTS {t} CASCADE"))
         Base.metadata.create_all(conn)
 
-        s = Session(bind=conn)
-        if s.scalar(select(Venue).limit(1)):
-            return
-        venue = Venue(name="The Copper Kettle", green_categories=["info"])
-        s.add(venue)
+
+def get_company(s, clerk_org_id: str, name_if_new: str = "My company") -> Company:
+    """The logged-in user's company. Created on first visit, filled with the event-venue example data."""
+    company = s.scalar(select(Company).where(Company.clerk_org_id == clerk_org_id))
+    if company:
+        return company
+    company = Company(clerk_org_id=clerk_org_id, name=name_if_new, green_categories=["info"])
+    s.add(company)
+    try:
         s.flush()
-        for name, cap, wd, we in DEMO_ROOMS:
-            s.add(Room(venue_id=venue.id, name=name, capacity=cap, weekday_min=wd, weekend_min=we))
-        from . import rag  # local import: rag needs the models above
-        vectors = rag.try_embed(DEMO_POLICIES)
-        for i, t in enumerate(DEMO_POLICIES):
-            s.add(Policy(venue_id=venue.id, text=t, embedding=vectors[i] if vectors else None))
-        s.flush()  # the surrounding transaction commits
-
-
-def get_venue(s) -> Venue:
-    """MVP has a single venue per deployment."""
-    return s.scalar(select(Venue).order_by(Venue.id).limit(1))
+    except IntegrityError:  # two first requests at once: the other one created it
+        s.rollback()
+        return s.scalar(select(Company).where(Company.clerk_org_id == clerk_org_id))
+    for room_name, cap, wd, we in DEMO_ROOMS:
+        s.add(Room(company_id=company.id, name=room_name, capacity=cap, weekday_min=wd, weekend_min=we))
+    from . import rag  # local import: rag needs the models above
+    vectors = rag.try_embed(DEMO_POLICIES)
+    for i, t in enumerate(DEMO_POLICIES):
+        s.add(Policy(company_id=company.id, text=t, embedding=vectors[i] if vectors else None))
+    s.commit()
+    return company

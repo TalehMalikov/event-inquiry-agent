@@ -20,9 +20,12 @@ CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1-mini")
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIM = 1536
 
-OWNER_PASSWORD = os.getenv("OWNER_PASSWORD", "")
-SESSION_SECRET = os.getenv("SESSION_SECRET", "")
-COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
-SESSION_DAYS = 30
+# Clerk (login). Publishable key: lets us find Clerk's public keys. Secret key: reads company names.
+CLERK_PUBLISHABLE_KEY = os.getenv("CLERK_PUBLISHABLE_KEY", "")
+CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "")
+# Sites allowed to use the tokens, e.g. "https://events.tmalikov.com,http://localhost:3000"
+CLERK_AUTHORIZED_PARTIES = [o.strip() for o in os.getenv("CLERK_AUTHORIZED_PARTIES", "").split(",") if o.strip()]
+# Protects your OpenAI bill: max AI drafts per company per day (UTC)
+DAILY_DRAFT_LIMIT = int(os.getenv("DAILY_DRAFT_LIMIT", "50"))
 # Serverless hosts run many small copies of the app, so keep each one's DB connections few
 DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))

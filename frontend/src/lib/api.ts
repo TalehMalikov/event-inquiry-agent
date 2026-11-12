@@ -43,19 +43,38 @@ export type Message = {
 };
 
 export type Policy = { id: number; text: string; indexed: boolean };
-export type Settings = { venue_name: string; green_categories: string[]; all_categories: string[] };
+export type Settings = {
+  company_name: string;
+  green_categories: string[];
+  all_categories: string[];
+  can_edit: boolean;
+};
+
+type ClerkWindow = Window & { Clerk?: { session?: { getToken: () => Promise<string | null> } | null } };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Clerk's short-lived session token says who you are and which company you're working in.
+  const token = await (window as ClerkWindow).Clerk?.session?.getToken();
   const res = await fetch(`/api${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
     cache: "no-store",
   });
-  if (res.status === 401 && path !== "/login") {
-    // Session missing or expired. This runs outside React, so a hard redirect is intended here.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = "/login";
-    throw new Error("Please log in");
+  if (res.status === 401 || res.status === 403) {
+    // Not signed in, or no company chosen yet. Runs outside React, so a hard redirect is intended.
+    const to = res.status === 401 ? "/sign-in" : "/choose-company";
+    let detail = "";
+    try {
+      detail = (await res.clone().json()).detail;
+    } catch {}
+    if (res.status === 401 || detail.startsWith("Choose")) {
+      window.location.href = to;
+      throw new Error(res.status === 401 ? "Please sign in" : "Choose a company first");
+    }
   }
   if (!res.ok) {
     let detail = res.statusText;
@@ -69,9 +88,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  login: (password: string) =>
-    request<{ ok: boolean }>("/login", { method: "POST", body: JSON.stringify({ password }) }),
-  logout: () => request<{ ok: boolean }>("/logout", { method: "POST" }),
   messages: () => request<Message[]>("/messages"),
   simulate: (email: { from_name: string; from_email: string; subject: string; body: string }) =>
     request<Message>("/messages/simulate", { method: "POST", body: JSON.stringify(email) }),
@@ -85,7 +101,7 @@ export const api = {
   addPolicy: (text: string) => request<Policy[]>("/policies", { method: "POST", body: JSON.stringify({ text }) }),
   deletePolicy: (id: number) => request<Policy[]>(`/policies/${id}`, { method: "DELETE" }),
   settings: () => request<Settings>("/settings"),
-  saveSettings: (s: { venue_name: string; green_categories: string[] }) =>
+  saveSettings: (s: { company_name: string; green_categories: string[] }) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(s) }),
 };
 

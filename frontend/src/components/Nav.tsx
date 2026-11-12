@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { usePathname } from "next/navigation";
+import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 
 const LINKS = [
   { href: "/", label: "Inbox", icon: "📥" },
-  { href: "/venue", label: "Venue", icon: "🏠" },
+  { href: "/venue", label: "Company", icon: "🏠" },
   { href: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
@@ -25,15 +25,11 @@ function Logo() {
 
 export default function Nav() {
   const pathname = usePathname();
-  const router = useRouter();
   const isActive = (href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
 
-  async function logout() {
-    await api.logout().catch(() => {});
-    router.push("/login");
-  }
+  const isAuthPage = ["/sign-in", "/sign-up", "/choose-company"].some((p) => pathname.startsWith(p));
 
-  if (pathname === "/login") {
+  if (isAuthPage) {
     return (
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex h-14 max-w-3xl items-center px-4">
@@ -64,9 +60,9 @@ export default function Nav() {
                 </Link>
               ))}
             </nav>
-            <button onClick={logout} className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-100">
-              Log out
-            </button>
+            {/* Switch company / create another one; hidePersonal: everything happens inside a company */}
+            <OrganizationSwitcher hidePersonal afterSelectOrganizationUrl="/" afterCreateOrganizationUrl="/" />
+            <UserButton />
           </div>
         </div>
       </header>

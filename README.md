@@ -8,7 +8,9 @@ AI assistant for event venues. **Every email gets a draft**, written only from t
 | 🟡 Yellow | Waits for owner approval | Quotes, dates, bookings |
 | 🔴 Red | Waits, flagged | Complaints, refunds, wrong facts |
 
-The AI writes; plain code rules decide the color. The owner chooses which categories may go out automatically.
+The AI writes; plain code rules decide the color. Each company chooses which categories may go out automatically.
+
+**Multi-company:** anyone can sign up (Google, Microsoft, or email + password, via Clerk) and create their company. Each company's emails, prices, policies (RAG) and rules are its own: the backend takes the company from the signed login token and filters every query by it. `backend/tests/test_isolation.py` checks this. Admins edit company data; members work the inbox. Each company has a daily AI-draft limit (`DAILY_DRAFT_LIMIT`).
 
 > The homework version (Streamlit) lives on the `main` branch.
 
@@ -17,17 +19,21 @@ The AI writes; plain code rules decide the color. The owner chooses which catego
 | Part | Tech |
 |---|---|
 | `backend/` | FastAPI + LangGraph agent (`interrupt` for owner approval), OpenAI gpt-4.1-mini |
-| `frontend/` | Next.js owner app: login, inbox, approve / edit / reject, venue data, settings. Mobile-friendly |
+| `frontend/` | Next.js app: sign-up/sign-in, company switcher, inbox, approve / edit / reject, company data, settings. Mobile-friendly |
+| Login | Clerk (users + companies as Clerk Organizations) |
 | Database | Postgres + pgvector: venue data, RAG over policies, email history, paused drafts |
 
 ## Run everything (Docker)
 
 ```powershell
-copy backend\.env.example backend\.env   # fill in OPENAI_API_KEY, OWNER_PASSWORD, SESSION_SECRET
-docker compose --profile full up -d --build
+copy backend\.env.example backend\.env   # OPENAI_API_KEY + Clerk keys
+cd frontend; npx vercel env pull .env.local; cd ..   # Clerk keys for the frontend
+docker compose --env-file frontend/.env.local --profile full up -d --build
 ```
 
-Open http://localhost:3000 and log in with `OWNER_PASSWORD`.
+Open http://localhost:3000 and sign up.
+
+Isolation test: `docker compose up -d db`, then `backend\.venv\Scripts\python tests	est_isolation.py`.
 
 ## Develop locally
 
@@ -50,19 +56,19 @@ Two Vercel projects from this repo, plus a Neon Postgres database (has pgvector)
 
 | Vercel project | Root directory | Environment variables |
 |---|---|---|
-| backend | `backend` | `OPENAI_API_KEY`, `OWNER_PASSWORD`, `SESSION_SECRET`, `COOKIE_SECURE=true`, `DATABASE_URL` (Neon, pooled) |
-| frontend | `frontend` | `BACKEND_URL` = the backend project's URL |
+| backend | `backend` | `OPENAI_API_KEY`, `DATABASE_URL` (Neon, pooled), `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_AUTHORIZED_PARTIES`, `DAILY_DRAFT_LIMIT` |
+| frontend | `frontend` | `BACKEND_URL` = the backend project's URL, Clerk keys (added by the Clerk integration) |
 
-The owner app is served at **events.tmalikov.com** (CNAME in GoDaddy to Vercel). The browser only talks to the frontend; Next.js forwards `/api/...` to the backend, so the login cookie stays on one domain.
+The owner app is served at **events.tmalikov.com** (CNAME in GoDaddy to Vercel). The browser only talks to the frontend; Next.js forwards `/api/...` to the backend with Clerk's session token.
 
 Notes: the backend sets itself up on first request (tables, demo data, embeddings). Emails are processed inside the request (~5-10 s), because serverless functions may stop after replying.
 
-Docker Compose still works for any other host. Use HTTPS with `COOKIE_SECURE=true`, a strong `OWNER_PASSWORD`, and a random `SESSION_SECRET` (the backend refuses to start without them).
+Docker Compose still works for any other host (the backend refuses to start without Clerk configured).
 
 ## Not yet
 
 - **Real email:** incoming email is simulated in the app; sending is logged only. Next: connect Outlook (Microsoft Graph).
-- One venue and one owner account per deployment.
+- Clerk runs as a development instance ("Development mode" badge); production needs Clerk DNS records in GoDaddy.
 - Notifications to the owner's phone.
 
 ## AI disclosure

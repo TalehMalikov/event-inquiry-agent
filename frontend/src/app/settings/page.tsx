@@ -50,10 +50,15 @@ export default function SettingsPage() {
         <p className="text-sm text-slate-400">Loading…</p>
       ) : (
         <>
+          {!settings.can_edit && (
+            <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+              Only your company&apos;s admins can change settings. You can still approve emails.
+            </p>
+          )}
           <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-200 sm:p-5">
-            <label className="text-sm font-semibold" htmlFor="venue-name">Venue name</label>
-            <input id="venue-name" value={settings.venue_name}
-              onChange={(e) => { setSettings({ ...settings, venue_name: e.target.value }); setSaved(false); }}
+            <label className="text-sm font-semibold" htmlFor="company-name">Company name</label>
+            <input id="company-name" value={settings.company_name}
+              onChange={(e) => { setSettings({ ...settings, company_name: e.target.value }); setSaved(false); }}
               className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" />
           </section>
 

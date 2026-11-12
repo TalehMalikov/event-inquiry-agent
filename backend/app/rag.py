@@ -1,4 +1,4 @@
-"""RAG over the venue's policies, using OpenAI embeddings stored in Postgres (pgvector)."""
+"""RAG over a company's own policies (always filtered by company), using OpenAI embeddings stored in Postgres (pgvector)."""
 import logging
 
 from langchain_openai import OpenAIEmbeddings
@@ -26,19 +26,19 @@ def try_embed(texts):
         return None
 
 
-def search(s, venue_id, query, k=3):
+def search(s, company_id, query, k=3):
     from .db import Policy
 
     have_vectors = s.scalar(
-        select(Policy.id).where(Policy.venue_id == venue_id, Policy.embedding.is_not(None)).limit(1)
+        select(Policy.id).where(Policy.company_id == company_id, Policy.embedding.is_not(None)).limit(1)
     )
     if not have_vectors:  # fallback: give the model every policy
-        return list(s.scalars(select(Policy.text).where(Policy.venue_id == venue_id)))
+        return list(s.scalars(select(Policy.text).where(Policy.company_id == company_id)))
 
     qv = embedder().embed_query(query)
     rows = s.scalars(
         select(Policy.text)
-        .where(Policy.venue_id == venue_id, Policy.embedding.is_not(None))
+        .where(Policy.company_id == company_id, Policy.embedding.is_not(None))
         .order_by(Policy.embedding.cosine_distance(qv))
         .limit(k)
     )

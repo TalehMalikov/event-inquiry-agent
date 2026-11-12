@@ -1,5 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { Suspense } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
+import CompanyScope from "@/components/CompanyScope";
 import Nav from "@/components/Nav";
 import "./globals.css";
 
@@ -21,8 +24,18 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col bg-slate-50 text-slate-900">
-        <Nav />
-        <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-24 pt-6 sm:pb-10">{children}</main>
+        {/* Inside <body>, as Clerk requires when Next.js cache components are on */}
+        <ClerkProvider taskUrls={{ "choose-organization": "/choose-company" }}>
+          {/* Suspense: who's signed in and the URL are only known at request time */}
+          <Suspense fallback={<div className="h-14 border-b border-slate-200 bg-white" />}>
+            <Nav />
+          </Suspense>
+          <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-24 pt-6 sm:pb-10">
+            <Suspense fallback={<p className="text-sm text-slate-400">Loading…</p>}>
+              <CompanyScope>{children}</CompanyScope>
+            </Suspense>
+          </main>
+        </ClerkProvider>
       </body>
     </html>
   );
