@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 
-// Chrome/Edge/Samsung fire this when the site can be installed; we keep it to show our own button.
+// Chrome/Edge/Samsung fire this when the site can be installed. A tiny script in layout.tsx catches it
+// at page start (window.__installPrompt), because it often fires before this component exists.
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: "accepted" | "dismissed" }> };
+type InstallWindow = Window & { __installPrompt?: InstallEvent | null };
 
 type Mode = "hidden" | "button" | "ios";
 const DISMISSED = "install-banner-dismissed";
@@ -23,19 +25,22 @@ export default function InstallApp({ banner = false }: { banner?: boolean }) {
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- install support is only known in the browser
     if (ios) setMode("ios");
-    const onPrompt = (e: Event) => {
-      e.preventDefault();
-      setPrompt(e as InstallEvent);
-      setMode("button");
+    const pick = () => {
+      const saved = (window as InstallWindow).__installPrompt;
+      if (saved) {
+        setPrompt(saved);
+        setMode("button");
+      }
     };
+    pick(); // it may already have arrived (e.g. right after a reload)
     const onInstalled = () => {
       setDone(true);
       setMode("hidden");
     };
-    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("installpromptready", pick);
     window.addEventListener("appinstalled", onInstalled);
     return () => {
-      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("installpromptready", pick);
       window.removeEventListener("appinstalled", onInstalled);
     };
   }, [banner]);
@@ -43,6 +48,7 @@ export default function InstallApp({ banner = false }: { banner?: boolean }) {
   async function install() {
     if (!prompt) return;
     await prompt.prompt();
+    (window as InstallWindow).__installPrompt = null; // Chrome allows each announcement to be used once
     if ((await prompt.userChoice).outcome === "accepted") setMode("hidden");
     setPrompt(null);
   }

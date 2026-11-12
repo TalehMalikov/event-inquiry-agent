@@ -26,6 +26,18 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+      <head>
+        {/* Chrome announces "installable" once, very early on each page load, often before React is ready.
+            Catch it here and keep it, so the Install button can use it whenever it appears. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__installPrompt=e;" +
+              "window.dispatchEvent(new Event('installpromptready'))});" +
+              "window.addEventListener('appinstalled',function(){window.__installPrompt=null})",
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col bg-slate-50 text-slate-900">
         {/* Inside <body>, as Clerk requires when Next.js cache components are on */}
         <ClerkProvider taskUrls={{ "choose-organization": "/choose-company" }}>
