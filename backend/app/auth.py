@@ -92,3 +92,14 @@ def org_name(org_id: str) -> str:
     except Exception as e:  # noqa: BLE001
         log.warning("Could not fetch organization name: %s", e)
         return "My company"
+
+
+def rename_org(org_id: str, name: str):
+    """Keep Clerk's company name (shown in the company switcher) in sync with ours."""
+    if not CLERK_SECRET_KEY:
+        return
+    try:
+        httpx.patch(f"https://api.clerk.com/v1/organizations/{org_id}", json={"name": name},
+                    headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"}, timeout=5).raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Could not rename organization in Clerk: %s", e)

@@ -341,8 +341,11 @@ def put_settings(body: SettingsIn, who: Who = Depends(admin)):
         raise HTTPException(422, f"Not allowed on the auto-send list: {sorted(bad)}")
     with SessionLocal() as s:
         c = s.get(Company, who.company_id)
+        renamed = c.name != body.company_name
         c.name, c.green_categories = body.company_name, body.green_categories
         s.commit()
+    if renamed:
+        auth.rename_org(who.ctx.org_id, body.company_name)
     return get_settings(who)
 
 
