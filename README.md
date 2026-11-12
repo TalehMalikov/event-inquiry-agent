@@ -32,20 +32,30 @@ START → understand → look_up → draft → traffic_light
 - **owner_review**: `interrupt()` pauses the graph; the checkpointer saves state until the owner clicks; `Command(resume=...)` continues it
 - **Streamlit** is the owner's screen: paste an email, see the color and reasons, approve, edit, or reject
 
+## What I used
+- **LangGraph**: the graph above, with conditional edges on the color and `interrupt` for owner approval
+- **LangChain**: prompt templates and chains (`prompt | model`), with structured output
+- **OpenAI (gpt-4.1-mini)**: understands the email and writes the draft; OpenAI embeddings for RAG
+- **Retrieval (RAG)**: finds the venue policies relevant to each email
+- **Streamlit**: the owner's screen (inbox, approve / edit / reject, settings, editable prices)
+
 ## Files
 
 | File | What it is |
 |---|---|
-| `event_bot.py` | **Main submission.** A single-file version in the style of `chatbot_example.py` (prompt templates → chains → LangGraph → Streamlit) |
-| `app.py`, `graph.py`, `venue.py` | Extended version: SQLite venue database, embedding-based RAG, structured outputs, email history, editable prices tab |
+| `app.py` | Streamlit owner screen. **Run this.** |
+| `graph.py` | The LangGraph agent: nodes, traffic-light rules, owner approval |
+| `venue.py` | The venue's facts: rooms and prices (SQLite) and policies (RAG search) |
 
 ## Run it
 
 ```powershell
 pip install -r requirements.txt
 copy .env.example .env        # put your OPENAI_API_KEY in .env
-streamlit run event_bot.py    # or: streamlit run app.py
+streamlit run app.py          # opens http://localhost:8501
 ```
+
+In the app: pick a sample email, click **Receive email**, then approve, edit, or reject. In the sidebar, choose which categories may be sent automatically. On the **Venue data** tab, change a price and the next reply uses it.
 
 Try these emails:
 - *"What time do you open on Sunday? Is there parking?"* → 🟢 sent automatically

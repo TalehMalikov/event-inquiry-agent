@@ -49,11 +49,12 @@ with st.sidebar:
     st.header("⚙️ Owner settings")
     green_categories = st.multiselect(
         "Categories the AI may send without asking me",
-        ["info", "inquiry", "booking", "complaint", "refund", "other"],
+        ["info", "inquiry", "booking", "other"],
         default=["info"],
         help="Start small. Promote categories to green as you start trusting the AI.",
     )
-    st.caption("Prices, dates, and promises always wait for you, whatever you pick here.")
+    st.caption("Prices, dates, and promises always wait for you, whatever you pick here. "
+               "Complaints and refunds are always red.")
 
 st.title(f"🚦 {venue.VENUE_NAME}: Traffic-Light Inbox")
 inbox_tab, venue_tab = st.tabs(["📥 Inbox", "🏠 Venue data"])
@@ -67,9 +68,12 @@ with inbox_tab:
     if st.button("📨 Receive email", type="primary", disabled=not email.strip()):
         thread_id = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread_id}}
-        with st.spinner("Understanding → looking up → drafting → checking..."):
-            graph.invoke({"email": email, "green_categories": green_categories}, config)
-        st.session_state.threads.insert(0, thread_id)
+        try:
+            with st.spinner("Understanding → looking up → drafting → checking..."):
+                graph.invoke({"email": email, "green_categories": green_categories}, config)
+            st.session_state.threads.insert(0, thread_id)
+        except Exception as e:  # e.g. bad API key, network problem
+            st.error(f"The AI step failed: {e}")
 
     st.divider()
     if not st.session_state.threads:

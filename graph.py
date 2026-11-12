@@ -79,12 +79,16 @@ class Draft(BaseModel):
 
 # ---------- Nodes ----------
 
+understand_prompt = ChatPromptTemplate.from_messages([
+    ("system", "Extract what the customer wants from this email to a restaurant/event venue."),
+    ("human", "{email}"),
+])
+
+
 def understand(state: EmailState):
-    """Read the email and pull out what the customer wants."""
-    request = model.with_structured_output(Request).invoke(
-        f"Extract the request from this customer email to a restaurant/event venue:\n\n{state['email']}"
-    )
-    return {"request": request.model_dump()}
+    """Read the email and pull out what the customer wants (prompt | model -> structured Request)."""
+    chain = understand_prompt | model.with_structured_output(Request)
+    return {"request": chain.invoke({"email": state["email"]}).model_dump()}
 
 
 def look_up(state: EmailState):
@@ -102,7 +106,10 @@ draft_prompt = ChatPromptTemplate.from_messages([
      "If a needed fact is missing, say you'll check with the team.\n"
      "If the request doesn't fit (too many guests, budget below the minimum), say so kindly "
      "and offer options that DO fit.\n"
-     "Never confirm a booking yourself; say the team will confirm.\n\n"
+     "Never confirm a booking yourself; say the team will confirm.\n"
+     "For complaints or refund requests, apologize sincerely and say the team will follow up personally. "
+     "Never promise OR refuse a refund or compensation; that is the owner's decision.\n"
+     "Sign off as 'The {venue_name} team'.\n\n"
      "ROOMS (capacity, weekday minimum spend, weekend minimum spend):\n{rooms}\n\n"
      "POLICIES:\n{policies}"),
     ("human", "Customer email:\n{email}"),
@@ -138,15 +145,18 @@ def traffic_light(state: EmailState):
         red.append(f"Sensitive topic: {req['category']}")
 
     # Fact check: every claim in the draft must match the database.
-    max_capacity = max(r["capacity"] for r in rooms)
-    if d.get("offered_guests") and d["offered_guests"] > max_capacity:
-        red.append(f"Draft offers {d['offered_guests']} guests, but max capacity is {max_capacity}")
-    guests = d.get("offered_guests") or req.get("guests") or 0
-    fitting = [r for r in rooms if r["capacity"] >= guests] or rooms
-    day = "weekend_min" if req.get("weekend") else "weekday_min"
-    lowest_min = min(r[day] for r in fitting)
-    if d.get("offered_price") and d["offered_price"] < lowest_min:
-        red.append(f"Draft offers ${d['offered_price']:g}, below the minimum of ${lowest_min}")
+    if rooms:
+        max_capacity = max(r["capacity"] for r in rooms)
+        if d.get("offered_guests") and d["offered_guests"] > max_capacity:
+            red.append(f"Draft offers {d['offered_guests']} guests, but max capacity is {max_capacity}")
+        guests = d.get("offered_guests") or req.get("guests") or 0
+        fitting = [r for r in rooms if r["capacity"] >= guests] or rooms
+        day = "weekend_min" if req.get("weekend") else "weekday_min"
+        lowest_min = min(r[day] for r in fitting)
+        if d.get("offered_price") and d["offered_price"] < lowest_min:
+            red.append(f"Draft offers ${d['offered_price']:g}, below the minimum of ${lowest_min}")
+    elif req["category"] in ("inquiry", "booking"):
+        yellow.append("No rooms on file to check the draft against")
 
     # Commitments need approval.
     if d["quoted_prices"]:
