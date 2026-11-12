@@ -38,7 +38,10 @@ def get_graph():
                 init_db()
                 if _pool:  # left over from a failed attempt
                     _pool.close()
+                # check: test each connection before use; max_idle: drop idle ones before the host closes them
+                # (Neon sleeps after ~5 min idle and cuts open connections)
                 _pool = ConnectionPool(CHECKPOINT_URL, min_size=1, max_size=DB_POOL_SIZE, open=True,
+                                       check=ConnectionPool.check_connection, max_idle=120,
                                        kwargs={"autocommit": True, "prepare_threshold": None,
                                                "row_factory": dict_row})
                 saver = PostgresSaver(_pool)
