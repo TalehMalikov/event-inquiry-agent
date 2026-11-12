@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, MailStatus } from "@/lib/api";
 
 // Top of the inbox: which mailbox the AI is watching, plus a manual "check now".
@@ -14,21 +14,26 @@ export default function MailboxBar({ onNewMail }: { onNewMail: () => void }) {
     api.gmail().then(setMail).catch(() => {});
   }, []);
 
-  // Without instant push, check Gmail every minute while this page is open and visible
+  // Without instant push, check Gmail every 15 seconds while this page is open and visible
   // (a background job also checks every 15 minutes when nobody has the app open).
   const autoCheck = mail?.connected && !mail.instant;
+  const inFlight = useRef(false); // a check that finds new mail also drafts it (~10 s): never overlap
   useEffect(() => {
     if (!autoCheck) return;
     const t = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible" || inFlight.current) return;
+      inFlight.current = true;
       api
         .syncGmail()
         .then((r) => {
           setMail(r);
           if (r.new) onNewMail();
         })
-        .catch(() => {});
-    }, 60_000);
+        .catch(() => {})
+        .finally(() => {
+          inFlight.current = false;
+        });
+    }, 15_000);
     return () => clearInterval(t);
   }, [autoCheck, onNewMail]);
 
