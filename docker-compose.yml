@@ -1,0 +1,43 @@
+name: venue-inbox
+
+# Local dev:   docker compose up -d db          (then run backend + frontend yourself)
+# Everything:  docker compose up -d --build     (app on http://localhost:3000)
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: inbox
+      POSTGRES_PASSWORD: inbox
+      POSTGRES_DB: inbox
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inbox"]
+      interval: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://inbox:inbox@db:5432/inbox
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["full"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on: [backend]
+    profiles: ["full"]
+
+volumes:
+  pgdata:

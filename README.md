@@ -1,6 +1,6 @@
-# Event Inquiry Agent (HW 6-1)
+# Event Inquiry Agent: product MVP
 
-An AI assistant that answers event inquiries for a venue. **Every email gets a draft**, written only from the venue's real facts. A traffic light then decides: can the AI send it, or should it wait for the owner?
+AI assistant for event venues. **Every email gets a draft**, written only from the venue's real facts. A traffic light decides what happens next:
 
 | Color | What happens | Examples |
 |---|---|---|
@@ -8,43 +8,56 @@ An AI assistant that answers event inquiries for a venue. **Every email gets a d
 | 🟡 Yellow | Waits for owner approval | Quotes, dates, bookings |
 | 🔴 Red | Waits, flagged | Complaints, refunds, wrong facts |
 
-The AI writes the draft; plain code rules decide the color.
+The AI writes; plain code rules decide the color. The owner chooses which categories may go out automatically.
 
-## How it works
+> The homework version (Streamlit) lives on the `main` branch.
 
-```
-understand → look_up → draft → traffic_light ─┬─ green ──────────────▶ send
-                                              └─ yellow/red → owner_review → send / reject
-```
+## Stack
 
-- **look_up**: prices and capacity from a database (SQLite); policies via RAG (embedding search)
-- **traffic_light**: checks the draft's prices and guest count against the database
-- **owner_review**: LangGraph `interrupt()` pauses until the owner clicks Approve, Edit, or Reject
-
-**Built with:** LangGraph, LangChain, OpenAI (gpt-4.1-mini), Streamlit.
-
-| File | Purpose |
+| Part | Tech |
 |---|---|
-| `app.py` | Streamlit screen (run this) |
-| `graph.py` | LangGraph agent and traffic-light rules |
-| `venue.py` | Venue data and RAG search |
+| `backend/` | FastAPI + LangGraph agent (`interrupt` for owner approval), OpenAI gpt-4.1-mini |
+| `frontend/` | Next.js owner app: login, inbox, approve / edit / reject, venue data, settings. Mobile-friendly |
+| Database | Postgres + pgvector: venue data, RAG over policies, email history, paused drafts |
 
-## Run
+## Run everything (Docker)
 
 ```powershell
-pip install -r requirements.txt
-copy .env.example .env      # add your OPENAI_API_KEY
-streamlit run app.py
+copy backend\.env.example backend\.env   # fill in OPENAI_API_KEY, OWNER_PASSWORD, SESSION_SECRET
+docker compose --profile full up -d --build
 ```
 
-Try: *"Can you host 80 people Saturday for $500?"* → 🟡 the draft offers the real limits (60 guests, $800).
+Open http://localhost:3000 and log in with `OWNER_PASSWORD`.
 
-## Limitations
+## Develop locally
 
-- Sending is simulated: no real email is sent.
-- Owner settings reset when the page reloads.
-- The color rules rely on facts the AI extracts from the draft; when unsure, the app waits for the owner.
+```powershell
+docker compose up -d db                  # database only
+
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python -m uvicorn app.main:app --port 8000 --reload
+
+cd frontend                              # new terminal
+npm install
+npm run dev                              # http://localhost:3000
+```
+
+## Deploy
+
+Any host that runs Docker Compose (a VPS, Railway, Render, Fly.io...). Before going live:
+
+- Put it behind **HTTPS** and set `COOKIE_SECURE=true`.
+- Use a strong `OWNER_PASSWORD` and a random `SESSION_SECRET` (the backend refuses to start without them).
+- Change the Postgres password in `docker-compose.yml`, and don't expose port 5433 publicly.
+
+## Not yet
+
+- **Real email:** incoming email is simulated in the app; sending is logged only. Next: connect Outlook (Microsoft Graph).
+- One venue and one owner account per deployment.
+- Notifications to the owner's phone.
 
 ## AI disclosure
 
-Built with help from an AI assistant (Claude, by Anthropic), based on my idea and direction. I reviewed the code and can explain how every part works.
+Built with help from an AI assistant (Claude, by Anthropic), based on my idea and direction.

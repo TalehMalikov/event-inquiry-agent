@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv
+sqlalchemy>=2.0
+psycopg[binary,pool]>=3.2
+pgvector>=0.3
+itsdangerous>=2.2
+langchain-core>=1.0
+langchain-openai>=1.0
+langgraph>=1.0
+langgraph-checkpoint-postgres>=2.0
