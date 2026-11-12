@@ -284,14 +284,12 @@ def to_html(text: str) -> str:
 
 
 def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_reply_to="", references="",
-               automatic=False):
+               automatic=False):  # noqa: ARG001  (kept for logging/learning; replies look identical either way)
     msg = EmailMessage()
     msg["To"] = to
     msg["From"] = mailbox.email_address
     msg["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
     msg["Message-ID"] = make_msgid(domain=mailbox.email_address.split("@")[-1])
-    if automatic:  # standard header that stops other mail robots from answering back (no loops)
-        msg["Auto-Submitted"] = "auto-replied"
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
         msg["References"] = f"{references} {in_reply_to}".strip()
