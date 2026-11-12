@@ -85,6 +85,22 @@ class Who:
     company_id: int
 
 
+_name_checked: dict[str, float] = {}
+NAME_SYNC_SECONDS = 300
+
+
+def sync_company_name(s, company: Company):
+    """Pick up a rename done in Clerk's company menu (checked at most every 5 minutes per company)."""
+    now = time.time()
+    if now - _name_checked.get(company.clerk_org_id, 0) < NAME_SYNC_SECONDS:
+        return
+    _name_checked[company.clerk_org_id] = now
+    name = auth.fetch_org_name(company.clerk_org_id)
+    if name and name != company.name:
+        company.name = name[:200]
+        s.commit()
+
+
 def current(ctx: auth.Ctx = Depends(auth.require_user)) -> Who:
     """The logged-in user and their company. A company's row is created on its first visit."""
     get_graph()
@@ -92,6 +108,9 @@ def current(ctx: auth.Ctx = Depends(auth.require_user)) -> Who:
         company = s.scalar(select(Company).where(Company.clerk_org_id == ctx.org_id))
         if company is None:
             company = get_company(s, ctx.org_id, auth.org_name(ctx.org_id))
+            _name_checked[ctx.org_id] = time.time()
+        else:
+            sync_company_name(s, company)
         return Who(ctx=ctx, company_id=company.id)
 
 
@@ -169,6 +188,7 @@ def process_message(message_id: int):
     with SessionLocal() as s:
         m = s.get(Message, message_id)
         company = s.get(Company, m.company_id)
+        sync_company_name(s, company)  # the reply signs off with the company's current name
         inputs = {
             "message_id": m.id, "company_id": company.id, "company_name": company.name,
             "green_categories": company.green_categories, "from_name": m.from_name,
@@ -325,6 +345,7 @@ def put_settings(body: SettingsIn, who: Who = Depends(admin)):
         s.commit()
     if renamed:
         auth.rename_org(who.ctx.org_id, body.company_name)
+        _name_checked[who.ctx.org_id] = time.time()  # just synced
     return get_settings(who)
 
 

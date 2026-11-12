@@ -280,7 +280,7 @@ def to_html(text: str) -> str:
     """Paragraphs (blank-line separated) become <p>, single line breaks become <br>. Everything is escaped."""
     paras = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
     inner = "".join(f"<p>{html.escape(p).replace(chr(10), '<br>')}</p>" for p in paras)
-    return f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5">{inner}</div>'
+    return f"<div>{inner}</div>"  # no font styling: shows in the reader's normal mail font
 
 
 def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_reply_to="", references="",

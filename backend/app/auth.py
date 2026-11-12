@@ -80,18 +80,23 @@ def require_user(request: Request) -> Ctx:
     return Ctx(user_id=claims["sub"], org_id=org_id, role=role)
 
 
-def org_name(org_id: str) -> str:
-    """Company name from Clerk, used once when we first see a company."""
+def fetch_org_name(org_id: str):
+    """The company's current name in Clerk, or None if Clerk can't be reached."""
     if not CLERK_SECRET_KEY:
-        return "My company"
+        return None
     try:
         r = httpx.get(f"https://api.clerk.com/v1/organizations/{org_id}",
                       headers={"Authorization": f"Bearer {CLERK_SECRET_KEY}"}, timeout=5)
         r.raise_for_status()
-        return r.json().get("name") or "My company"
+        return r.json().get("name") or None
     except Exception as e:  # noqa: BLE001
         log.warning("Could not fetch organization name: %s", e)
-        return "My company"
+        return None
+
+
+def org_name(org_id: str) -> str:
+    """Company name from Clerk, used when we first see a company."""
+    return fetch_org_name(org_id) or "My company"
 
 
 def rename_org(org_id: str, name: str):
