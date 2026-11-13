@@ -2,7 +2,7 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
 // Pages anyone can open. /api is checked by the backend itself (it verifies Clerk's token).
-const isPublic = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)", "/api(.*)"]);
+const isPublic = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)", "/api(.*)", "/architecture(.*)"]);
 const isChooseCompany = createRouteMatcher(["/choose-company(.*)"]);
 
 export default clerkMiddleware(async (auth, req) => {

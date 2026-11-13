@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.25",
+    "@xyflow/react": "^12.12.1",
     "next": "16.4.6",
     "react": "19.3.0",
     "react-dom": "19.3.0"
