@@ -4,7 +4,6 @@ import {
   Background,
   Handle,
   MarkerType,
-  MiniMap,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -15,7 +14,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Box, Info, Kind, Link, Table } from "./data";
 
 // ---------- Looks ----------
@@ -41,6 +40,10 @@ const TONE: Record<string, string> = {
   blue: "border-blue-200 bg-blue-50/70 text-blue-700",
   rose: "border-rose-200 bg-rose-50/70 text-rose-700",
 };
+
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 3;
+const ZOOM_SPEED = 0.012; // bigger = faster pinch zoom
 
 const CARD_W = 180;
 const CARD_H = 56;
@@ -76,11 +79,9 @@ function Card({ data, selected }: NodeProps<Node<CardData>>) {
   return (
     <div
       style={{ width: CARD_W, height: CARD_H }}
-      className={`flex cursor-pointer items-center overflow-hidden rounded-xl border bg-white shadow-sm transition duration-300 ${
+      className={`flex cursor-pointer items-center overflow-hidden rounded-xl border bg-white transition-opacity ${
         data.kind === "off" ? "border-dashed border-slate-300 text-slate-400" : "border-slate-200"
-      } ${selected || data.hot ? "scale-105 shadow-md ring-2 ring-slate-900" : "hover:shadow-md"} ${
-        data.dim ? "opacity-20" : ""
-      }`}
+      } ${selected || data.hot ? "ring-2 ring-slate-900" : ""} ${data.dim ? "opacity-20" : ""}`}
     >
       <span className={`h-full w-1.5 shrink-0 ${ACCENT[data.kind]}`} />
       <span className="px-2.5 text-xl leading-none" aria-hidden>
@@ -104,8 +105,8 @@ function TableCard({ data, selected }: NodeProps<Node<TableData>>) {
   return (
     <div
       style={{ width: TABLE_W }}
-      className={`cursor-pointer overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm transition duration-300 ${
-        selected || data.hot ? "scale-105 shadow-md ring-2 ring-slate-900" : ""
+      className={`cursor-pointer overflow-hidden rounded-xl border border-sky-200 bg-white transition-opacity ${
+        selected || data.hot ? "ring-2 ring-slate-900" : ""
       } ${data.dim ? "opacity-20" : ""}`}
     >
       <div className="bg-sky-600 px-3 py-1.5 font-mono text-sm font-semibold text-white">{data.title}</div>
@@ -176,15 +177,16 @@ function initialNodes(items: Props["items"], boxes: Props["boxes"], tables: Prop
 }
 
 function ZoomButtons() {
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const { zoomTo, getZoom, fitView } = useReactFlow();
+  const step = (f: number) => zoomTo(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, getZoom() * f)), { duration: 180 });
   const btn =
     "flex h-10 w-10 items-center justify-center rounded-xl bg-white text-lg font-semibold text-slate-700 shadow ring-1 ring-slate-200 hover:bg-slate-50 active:scale-95";
   return (
     <div className="absolute bottom-3 left-3 z-10 flex flex-col gap-2">
-      <button className={btn} onClick={() => zoomIn({ duration: 250 })} aria-label="Zoom in">
+      <button className={btn} onClick={() => step(1.8)} aria-label="Zoom in">
         +
       </button>
-      <button className={btn} onClick={() => zoomOut({ duration: 250 })} aria-label="Zoom out">
+      <button className={btn} onClick={() => step(1 / 1.8)} aria-label="Zoom out">
         −
       </button>
       <button className={btn} onClick={() => fitView({ duration: 500, padding: 0.06 })} aria-label="Show all">
@@ -196,7 +198,29 @@ function ZoomButtons() {
 
 function Canvas({ items, boxes, tables, links, highlight, selected, onSelect, height }: Props) {
   const [nodes, , onNodesChange] = useNodesState(initialNodes(items, boxes, tables));
-  const { fitView } = useReactFlow();
+  const { fitView, getViewport, setViewport } = useReactFlow();
+  const wrap = useRef<HTMLDivElement>(null);
+
+  // Fast pinch zoom. Touchpad pinch (and Ctrl + wheel) arrives as many tiny wheel events, which the default
+  // handler turns into slow zooming; here each event zooms proportionally, around the cursor.
+  useEffect(() => {
+    const el = wrap.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return; // two-finger scroll: React Flow pans
+      e.preventDefault();
+      e.stopPropagation();
+      const v = getViewport();
+      const delta = e.deltaMode === 1 ? e.deltaY * 20 : e.deltaY;
+      const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.zoom * Math.exp(-delta * ZOOM_SPEED)));
+      const r = el.getBoundingClientRect();
+      const px = e.clientX - r.left;
+      const py = e.clientY - r.top;
+      setViewport({ zoom, x: px - ((px - v.x) * zoom) / v.zoom, y: py - ((py - v.y) * zoom) / v.zoom });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
+  }, [getViewport, setViewport]);
 
   // The camera follows: tapping a card or a flow step glides to it; clearing shows everything again
   const focusKey = highlight ? [...highlight.nodes].sort().join(",") : "";
@@ -250,7 +274,7 @@ function Canvas({ items, boxes, tables, links, highlight, selected, onSelect, he
           sourceHandle: sh,
           targetHandle: th,
           label: hot ? l.label : undefined, // words only on the lines that matter right now
-          animated: hot || l.off,
+          animated: hot, // moving dashes only on lit lines (constant animation slows zooming)
           zIndex: hot ? 10 : 0,
           style: {
             stroke: color,
@@ -269,7 +293,7 @@ function Canvas({ items, boxes, tables, links, highlight, selected, onSelect, he
   );
 
   return (
-    <div className={`${height ?? "h-[70vh] min-h-[460px]"} relative w-full overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200`}>
+    <div ref={wrap} className={`${height ?? "h-[70vh] min-h-[460px]"} relative w-full overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200`}>
       <ReactFlow
         nodes={shownNodes}
         edges={edges}
@@ -283,16 +307,15 @@ function Canvas({ items, boxes, tables, links, highlight, selected, onSelect, he
         panOnScroll
         panOnScrollSpeed={0.9}
         zoomOnScroll={false}
-        zoomOnPinch
+        zoomOnPinch // phone pinch; touchpad pinch is caught first by the faster handler above
         zoomOnDoubleClick
         panOnDrag
-        minZoom={0.3}
-        maxZoom={2.5}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
         nodesConnectable={false}
         proOptions={{ hideAttribution: false }}
       >
         <Background gap={24} color="#eef2f7" />
-        <MiniMap pannable zoomable className="!hidden md:!block" nodeStrokeWidth={2} />
       </ReactFlow>
       <ZoomButtons />
     </div>
