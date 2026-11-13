@@ -53,7 +53,7 @@ async function act(action, data) {
     });
     if (!res.ok) throw new Error(String(res.status));
     const out = await res.json();
-    await self.registration.showNotification(action === "approve" ? `✓ Sent · ${out.title}` : `Declined · ${out.title}`, {
+    await self.registration.showNotification(action === "approve" ? `✓ Sent to ${out.who}` : `Declined`, {
       tag: "done",
       badge: "/badge-96.png",
       silent: true,

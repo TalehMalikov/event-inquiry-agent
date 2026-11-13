@@ -119,10 +119,16 @@ DRAFT_PROMPT = ChatPromptTemplate.from_messages([
      "Never confirm a booking yourself; say the team will confirm.\n"
      "For complaints or refund requests, apologize sincerely and say the team will follow up personally. "
      "Never promise OR refuse a refund or compensation; that is the owner's decision.\n"
-     "Sign off as 'The {company_name} team'.\n\n"
+     "Sign off as '{sign_off}'.\n\n"
      "ROOMS:\n{rooms}\n\nPOLICIES:\n{policies}"),
     ("human", "From: {from_name}\nSubject: {subject}\n\n{email}"),
 ])
+
+
+def sign_off(company_name: str) -> str:
+    """'The Copper Oven team' (not 'The The Copper Oven team') and 'The Hearth & Hops team'."""
+    name = company_name.strip()
+    return f"{name} team" if name.lower().startswith("the ") else f"The {name} team"
 
 
 def draft(state: EmailState):
@@ -134,6 +140,7 @@ def draft(state: EmailState):
     chain = DRAFT_PROMPT | model().with_structured_output(Draft)
     result = chain.invoke({
         "company_name": state["company_name"],
+        "sign_off": sign_off(state["company_name"]),
         "rooms": rooms_text,
         "policies": "\n".join(f"- {p}" for p in state["policies"]) or "- (none)",
         "from_name": state["from_name"],

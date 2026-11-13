@@ -427,7 +427,7 @@ def push_act(body: ActIn):
     message_id, action = parsed
     get_graph()
     m = resume_message(message_id, {"action": action, "text": None} if action == "approve" else {"action": "reject"})
-    return {"status": m["status"], "title": f"{m['from_name']}: {m['subject']}"}
+    return {"status": m["status"], "who": (m["from_name"] or "the customer").split()[0]}
 
 
 @api.post("/push/test")
@@ -435,7 +435,7 @@ def push_test(who: Who = Depends(current)):
     with SessionLocal() as s:
         subs = list(s.scalars(select(PushSubscription).where(PushSubscription.company_id == who.company_id,
                                                              PushSubscription.user_id == who.ctx.user_id)))
-    sent = push.notify(subs, title="🟡 Test: this is how an email that needs you will look", url="/", tag="test")
+    sent = push.notify(subs, title="🟡 Approve reply to Test", url="/", tag="test")
     return {"sent": sent}
 
 

@@ -230,7 +230,7 @@ with TestClient(main.app) as client:
     check("yellow thread labeled 'AI · Needs approval'", G.labels.get(g2) == "yellow")
     pings_a = [p for e, p in PINGS if "-a" in e]
     check("ping went to A's devices", len(pings_a) == 2 and pings_a[0]["url"] == f"/m/{m2['id']}")
-    check("ping is one line: color + who + what", pings_a[0]["title"] == "🟡 Mike: Party" and pings_a[0]["body"] == "")
+    check("ping is short: color + action + first name", pings_a[0]["title"] == "🟡 Approve reply to Mike" and pings_a[0]["body"] == "")
     check("yellow ping has Send / Decline", [a["action"] for a in pings_a[0]["actions"]] == ["approve", "reject"]
           and [a["title"] for a in pings_a[0]["actions"]] == ["Send", "Decline"])
     check("B's phone got nothing", not [e for e, _ in PINGS if "-b" in e])
@@ -266,7 +266,7 @@ with TestClient(main.app) as client:
     sync(client, A)
     check("refund is red with a draft", msg(client, A, g4)["color"] == "red"
           and [d for d in G.drafts.values() if d["thread_id"] == f"t{g4}"] and G.labels.get(g4) == "red")
-    check("red ping title", [p for _, p in PINGS][-1]["title"].startswith("🔴"))
+    check("red ping title", [p for _, p in PINGS][-1]["title"] == "🔴 Lisa needs you")
     check("red ping has no Send button", [p for _, p in PINGS][-1]["actions"] == [])
 
     # 🔴 wrong fact: NO draft left ready to send
