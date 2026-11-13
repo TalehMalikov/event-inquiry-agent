@@ -6,12 +6,15 @@ Notifications only go to the devices of the company the email belongs to.
 import base64
 import json
 import logging
+import time
+
+import jwt
 
 from py_vapid import Vapid
 from pywebpush import WebPushException, webpush
 from sqlalchemy import delete, select
 
-from .config import VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_SUBJECT
+from .config import MAILBOX_ENCRYPTION_KEY, VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_SUBJECT
 from .db import PushSubscription, SessionLocal
 
 log = logging.getLogger("push")
@@ -47,8 +50,35 @@ def _send(sub: PushSubscription, payload: str) -> bool:
         return True
 
 
-def notify(subs, *, title: str, body: str, url: str, tag: str = "") -> int:
-    payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag})
+# ---------- Send / Decline buttons on the notification ----------
+# The buttons work without the app open, so each ping carries a one-time key for that ONE email and
+# action. Web Push payloads are end-to-end encrypted to the device; the key expires after 48 hours and
+# only works while the email is still waiting.
+ACTION_TTL = 48 * 3600
+
+
+def _action_secret():
+    return "push-action:" + MAILBOX_ENCRYPTION_KEY
+
+
+def action_token(message_id: int, action: str) -> str:
+    return jwt.encode({"m": message_id, "a": action, "exp": int(time.time()) + ACTION_TTL},
+                      _action_secret(), algorithm="HS256")
+
+
+def read_action_token(token: str):
+    """(message_id, action) or None if the key is forged or expired."""
+    try:
+        d = jwt.decode(token, _action_secret(), algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+    if d.get("a") not in ("approve", "reject"):
+        return None
+    return int(d["m"]), d["a"]
+
+
+def notify(subs, *, title: str, url: str, tag: str = "", body: str = "", actions=None) -> int:
+    payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag, "actions": actions or []})
     gone, sent = [], 0
     for sub in subs:
         if _send(sub, payload):

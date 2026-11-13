@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Suspense } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import AppHello from "@/components/AppHello";
 import CompanyScope from "@/components/CompanyScope";
 import Nav from "@/components/Nav";
 import "./globals.css";
@@ -41,6 +42,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col bg-slate-50 text-slate-900">
         {/* Inside <body>, as Clerk requires when Next.js cache components are on */}
         <ClerkProvider taskUrls={{ "choose-organization": "/choose-company" }}>
+          <AppHello />
           {/* Suspense: who's signed in and the URL are only known at request time */}
           <Suspense fallback={<div className="h-14 border-b border-slate-200 bg-white" />}>
             <Nav />

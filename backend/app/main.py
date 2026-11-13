@@ -414,13 +414,28 @@ def push_unsubscribe(body: PushIn, who: Who = Depends(current)):
     return {"ok": True}
 
 
+class ActIn(BaseModel):
+    token: str = Field(min_length=10, max_length=1000)
+
+
+@app.post("/api/push/act")
+def push_act(body: ActIn):
+    """Send / Decline tapped on a notification. No login: the one-time key IS the permission."""
+    parsed = push.read_action_token(body.token)
+    if parsed is None:
+        raise HTTPException(401, "This button expired. Open the app to decide.")
+    message_id, action = parsed
+    get_graph()
+    m = resume_message(message_id, {"action": action, "text": None} if action == "approve" else {"action": "reject"})
+    return {"status": m["status"], "title": f"{m['from_name']}: {m['subject']}"}
+
+
 @api.post("/push/test")
 def push_test(who: Who = Depends(current)):
     with SessionLocal() as s:
         subs = list(s.scalars(select(PushSubscription).where(PushSubscription.company_id == who.company_id,
                                                              PushSubscription.user_id == who.ctx.user_id)))
-    sent = push.notify(subs, title="🟡 Test notification", body="This is how emails that need you will look.",
-                       url="/", tag="test")
+    sent = push.notify(subs, title="🟡 Test: this is how an email that needs you will look", url="/", tag="test")
     return {"sent": sent}
 
 

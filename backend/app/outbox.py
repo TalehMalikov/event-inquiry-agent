@@ -10,7 +10,7 @@ from .db import Mailbox, Message, SessionLocal
 
 log = logging.getLogger("outbox")
 
-PING_TITLE = {"yellow": "🟡 Needs your approval", "red": "🔴 Needs you"}
+PING_DOT = {"yellow": "🟡", "red": "🔴"}
 
 
 def _load(s, message_id):
@@ -60,10 +60,15 @@ def stage(message_id: int, color: str, reply: str, make_draft: bool):
                     s.commit()
                 except gmail.GmailError as e:
                     log.warning("Draft failed for message %s: %s", message_id, e)
-        summary = f"{m.from_name}: {m.subject}"
+        title = f"{PING_DOT.get(color, '🟡')} {m.from_name}: {m.subject}"[:120]
         company_id = m.company_id
-    push.notify_company(company_id, title=PING_TITLE.get(color, "Needs you"), body=summary[:180],
-                        url=f"/m/{message_id}", tag=f"msg-{message_id}")
+    # Yellow: Send / Decline right on the notification. Red: no Send button; the owner opens it.
+    actions = []
+    if color == "yellow":
+        actions = [{"action": "approve", "title": "Send", "token": push.action_token(message_id, "approve")},
+                   {"action": "reject", "title": "Decline", "token": push.action_token(message_id, "reject")}]
+    push.notify_company(company_id, title=title, url=f"/m/{message_id}", tag=f"msg-{message_id}",
+                        actions=actions)
 
 
 def send(message_id: int, body: str, automatic: bool):

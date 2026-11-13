@@ -229,8 +229,10 @@ with TestClient(main.app) as client:
           and d2[0]["in_reply_to"] == f"<{g2}@x>" and "Main Hall" in d2[0]["body"])
     check("yellow thread labeled 'AI · Needs approval'", G.labels.get(g2) == "yellow")
     pings_a = [p for e, p in PINGS if "-a" in e]
-    check("ping went to A's devices", len(pings_a) == 2 and pings_a[0]["title"].startswith("🟡")
-          and pings_a[0]["url"] == f"/m/{m2['id']}" and "Mike" in pings_a[0]["body"])
+    check("ping went to A's devices", len(pings_a) == 2 and pings_a[0]["url"] == f"/m/{m2['id']}")
+    check("ping is one line: color + who + what", pings_a[0]["title"] == "🟡 Mike: Party" and pings_a[0]["body"] == "")
+    check("yellow ping has Send / Decline", [a["action"] for a in pings_a[0]["actions"]] == ["approve", "reject"]
+          and [a["title"] for a in pings_a[0]["actions"]] == ["Send", "Decline"])
     check("B's phone got nothing", not [e for e, _ in PINGS if "-b" in e])
     check("unsubscribed device was forgotten", client.get("/api/push/key", headers=A).json()["devices"] == 1)
     check("draft text never contains the color or reasons",
@@ -265,6 +267,7 @@ with TestClient(main.app) as client:
     check("refund is red with a draft", msg(client, A, g4)["color"] == "red"
           and [d for d in G.drafts.values() if d["thread_id"] == f"t{g4}"] and G.labels.get(g4) == "red")
     check("red ping title", [p for _, p in PINGS][-1]["title"].startswith("🔴"))
+    check("red ping has no Send button", [p for _, p in PINGS][-1]["actions"] == [])
 
     # 🔴 wrong fact: NO draft left ready to send
     g5 = G.deliver("alpha@gmail.com", "Big <big@c.com>", "Big party", "Can we book for 120 people?")
@@ -279,6 +282,34 @@ with TestClient(main.app) as client:
     check("reject", r.json()["status"] == "rejected")
     check("reject removed the draft and the color", not [d for d in G.drafts.values() if d["thread_id"] == f"t{g4}"]
           and G.labels.get(g4) is None)
+
+    # Send / Decline tapped on the notification (no login: the one-time key is the permission)
+    g7 = G.deliver("alpha@gmail.com", "Tom <tom@c.com>", "Party", "Can we book for 40?")
+    sync(client, A)
+    m7 = msg(client, A, g7)
+    acts7 = {a["action"]: a["token"] for a in [p for e, p in PINGS if "-a" in e][-1]["actions"]}
+    sent_before = len(G.sent)
+    check("forged key refused", client.post("/api/push/act", json={"token": "x" * 20}).status_code == 401)
+    r = client.post("/api/push/act", json={"token": acts7["approve"]})
+    check("Send button sends", r.status_code == 200 and r.json()["status"] == "sent_after_approval"
+          and len(G.sent) == sent_before + 1 and G.sent[-1]["body"].startswith("The Main Hall"))
+    check("…removes the Gmail draft and relabels green", not [d for d in G.drafts.values() if d["thread_id"] == f"t{g7}"]
+          and G.labels.get(g7) == "green")
+    check("same key can't be used twice", client.post("/api/push/act", json={"token": acts7["approve"]}).status_code == 409
+          and len(G.sent) == sent_before + 1)
+    check("Decline after Send is refused too", client.post("/api/push/act", json={"token": acts7["reject"]}).status_code == 409)
+
+    g8 = G.deliver("alpha@gmail.com", "Kim <kim@c.com>", "Party", "Can we book for 40?")
+    sync(client, A)
+    acts8 = {a["action"]: a["token"] for a in [p for e, p in PINGS if "-a" in e][-1]["actions"]}
+    r = client.post("/api/push/act", json={"token": acts8["reject"]})
+    check("Decline button declines, nothing sent", r.json()["status"] == "rejected" and len(G.sent) == sent_before + 1)
+    check("…draft and color removed", not [d for d in G.drafts.values() if d["thread_id"] == f"t{g8}"]
+          and G.labels.get(g8) is None)
+    check("a key only works for its own email", acts7["approve"] != acts8["approve"])
+    expired = jwt.encode({"m": m7["id"], "a": "approve", "exp": int(time.time()) - 10},
+                         push._action_secret(), algorithm="HS256")
+    check("expired key refused", client.post("/api/push/act", json={"token": expired}).status_code == 401)
 
     # legacy connection (no drafts permission): still works, no drafts/labels, ping still goes out
     g6 = G.deliver("beta@gmail.com", "Bob <bob@c.com>", "Party", "Can we book for 40?")
