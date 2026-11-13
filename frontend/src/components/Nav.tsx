@@ -8,7 +8,6 @@ const LINKS = [
   { href: "/", label: "Inbox", icon: "📥" },
   { href: "/venue", label: "Company", icon: "🏠" },
   { href: "/settings", label: "Settings", icon: "⚙️" },
-  { href: "/architecture", label: "Architecture", icon: "🧭" },
 ];
 
 function Logo() {

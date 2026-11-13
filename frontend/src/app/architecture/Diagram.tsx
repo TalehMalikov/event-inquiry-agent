@@ -2,19 +2,20 @@
 
 import {
   Background,
-  Controls,
   Handle,
   MarkerType,
   MiniMap,
   Position,
   ReactFlow,
+  ReactFlowProvider,
   useNodesState,
+  useReactFlow,
   type Edge,
   type Node,
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { Box, Info, Kind, Link, Table } from "./data";
 
 // ---------- Looks ----------
@@ -30,27 +31,27 @@ const ACCENT: Record<Kind, string> = {
 };
 
 const TONE: Record<string, string> = {
-  slate: "border-slate-300 bg-slate-100/70 text-slate-500",
-  zinc: "border-zinc-400 bg-zinc-100/80 text-zinc-600",
-  emerald: "border-emerald-300 bg-emerald-50/80 text-emerald-700",
-  violet: "border-violet-300 bg-violet-50/80 text-violet-700",
-  teal: "border-teal-300 bg-teal-50/80 text-teal-700",
-  sky: "border-sky-300 bg-sky-50/80 text-sky-700",
-  amber: "border-amber-300 bg-amber-50/80 text-amber-700",
-  blue: "border-blue-300 bg-blue-50/80 text-blue-700",
-  rose: "border-rose-300 bg-rose-50/80 text-rose-700",
+  slate: "border-slate-200 bg-slate-100/60 text-slate-500",
+  zinc: "border-zinc-300 bg-zinc-100/70 text-zinc-600",
+  emerald: "border-emerald-200 bg-emerald-50/70 text-emerald-700",
+  violet: "border-violet-200 bg-violet-50/70 text-violet-700",
+  teal: "border-teal-200 bg-teal-50/70 text-teal-700",
+  sky: "border-sky-200 bg-sky-50/70 text-sky-700",
+  amber: "border-amber-200 bg-amber-50/70 text-amber-700",
+  blue: "border-blue-200 bg-blue-50/70 text-blue-700",
+  rose: "border-rose-200 bg-rose-50/70 text-rose-700",
 };
 
-const CARD_W = 220;
-const CARD_H = 76;
-const TABLE_W = 260;
+const CARD_W = 180;
+const CARD_H = 56;
+const TABLE_W = 200;
 
 type Mark = { dim?: boolean; hot?: boolean };
 type CardData = Info & Mark;
 type BoxData = { label: string; tone: string };
 type TableData = Table & Mark;
 
-// Handles on all four sides; each line picks the sides that face each other (see sideFor), so dragging stays tidy.
+// Handles on all four sides; each line uses the sides that face each other (sideFor), so dragging stays tidy.
 function Sides() {
   return (
     <>
@@ -74,23 +75,18 @@ function Sides() {
 function Card({ data, selected }: NodeProps<Node<CardData>>) {
   return (
     <div
-      style={{ width: CARD_W, minHeight: CARD_H }}
-      className={`flex overflow-hidden rounded-xl border bg-white text-left shadow-sm transition ${
-        data.kind === "off" ? "border-dashed border-slate-300" : "border-slate-200"
-      } ${selected || data.hot ? "ring-2 ring-slate-900" : ""} ${data.dim ? "opacity-25" : ""}`}
+      style={{ width: CARD_W, height: CARD_H }}
+      className={`flex cursor-pointer items-center overflow-hidden rounded-xl border bg-white shadow-sm transition duration-300 ${
+        data.kind === "off" ? "border-dashed border-slate-300 text-slate-400" : "border-slate-200"
+      } ${selected || data.hot ? "scale-105 shadow-md ring-2 ring-slate-900" : "hover:shadow-md"} ${
+        data.dim ? "opacity-20" : ""
+      }`}
     >
-      <span className={`w-1.5 shrink-0 ${ACCENT[data.kind]}`} />
-      <div className="flex min-w-0 flex-1 items-start gap-2 p-2.5">
-        <span className="text-xl leading-none" aria-hidden>
-          {data.icon}
-        </span>
-        <div className="min-w-0">
-          <div className={`text-[13px] font-semibold leading-tight ${data.kind === "off" ? "text-slate-400" : ""}`}>
-            {data.title}
-          </div>
-          <div className="mt-0.5 text-[11px] leading-snug text-slate-500">{data.tech}</div>
-        </div>
-      </div>
+      <span className={`h-full w-1.5 shrink-0 ${ACCENT[data.kind]}`} />
+      <span className="px-2.5 text-xl leading-none" aria-hidden>
+        {data.icon}
+      </span>
+      <span className="truncate pr-2 text-sm font-semibold">{data.title}</span>
       <Sides />
     </div>
   );
@@ -98,8 +94,8 @@ function Card({ data, selected }: NodeProps<Node<CardData>>) {
 
 function GroupBox({ data }: NodeProps<Node<BoxData>>) {
   return (
-    <div className={`h-full w-full rounded-2xl border-2 ${TONE[data.tone] ?? TONE.slate}`}>
-      <div className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wide">{data.label}</div>
+    <div className={`h-full w-full rounded-2xl border ${TONE[data.tone] ?? TONE.slate}`}>
+      <div className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wider">{data.label}</div>
     </div>
   );
 }
@@ -108,17 +104,14 @@ function TableCard({ data, selected }: NodeProps<Node<TableData>>) {
   return (
     <div
       style={{ width: TABLE_W }}
-      className={`overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm ${
-        selected || data.hot ? "ring-2 ring-slate-900" : ""
-      } ${data.dim ? "opacity-25" : ""}`}
+      className={`cursor-pointer overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm transition duration-300 ${
+        selected || data.hot ? "scale-105 shadow-md ring-2 ring-slate-900" : ""
+      } ${data.dim ? "opacity-20" : ""}`}
     >
-      <div className="bg-sky-600 px-3 py-1.5 text-white">
-        <div className="font-mono text-[13px] font-semibold">{data.title}</div>
-        <div className="text-[10px] opacity-80">{data.note}</div>
-      </div>
-      <ul className="divide-y divide-slate-100 font-mono text-[11px]">
+      <div className="bg-sky-600 px-3 py-1.5 font-mono text-sm font-semibold text-white">{data.title}</div>
+      <ul className="font-mono text-[11px] text-slate-600">
         {data.cols.map((c) => (
-          <li key={c} className={`px-3 py-1 ${/PK|FK/.test(c) ? "text-sky-700" : "text-slate-600"}`}>
+          <li key={c} className="border-t border-slate-100 px-3 py-1">
             {c}
           </li>
         ))}
@@ -182,35 +175,63 @@ function initialNodes(items: Props["items"], boxes: Props["boxes"], tables: Prop
   return out;
 }
 
-export default function Diagram({ items, boxes, tables, links, highlight, selected, onSelect, height }: Props) {
+function ZoomButtons() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const btn =
+    "flex h-10 w-10 items-center justify-center rounded-xl bg-white text-lg font-semibold text-slate-700 shadow ring-1 ring-slate-200 hover:bg-slate-50 active:scale-95";
+  return (
+    <div className="absolute bottom-3 left-3 z-10 flex flex-col gap-2">
+      <button className={btn} onClick={() => zoomIn({ duration: 250 })} aria-label="Zoom in">
+        +
+      </button>
+      <button className={btn} onClick={() => zoomOut({ duration: 250 })} aria-label="Zoom out">
+        −
+      </button>
+      <button className={btn} onClick={() => fitView({ duration: 500, padding: 0.06 })} aria-label="Show all">
+        ⤢
+      </button>
+    </div>
+  );
+}
+
+function Canvas({ items, boxes, tables, links, highlight, selected, onSelect, height }: Props) {
   const [nodes, , onNodesChange] = useNodesState(initialNodes(items, boxes, tables));
+  const { fitView } = useReactFlow();
+
+  // The camera follows: tapping a card or a flow step glides to it; clearing shows everything again
+  const focusKey = highlight ? [...highlight.nodes].sort().join(",") : "";
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (focusKey) fitView({ nodes: focusKey.split(",").map((id) => ({ id })), duration: 600, padding: 0.35, maxZoom: 1.3 });
+      else fitView({ duration: 600, padding: 0.06 });
+    }, 30);
+    return () => clearTimeout(t);
+  }, [focusKey, fitView]);
 
   // Centers in diagram coordinates (children are stored relative to their group)
   const centers = useMemo(() => {
     const byId = new Map(nodes.map((n) => [n.id, n]));
-    const tableRows = new Map((tables ?? []).map((t) => [t.id, t.cols.length]));
+    const rows = new Map((tables ?? []).map((t) => [t.id, t.cols.length]));
     const out = new Map<string, XY>();
     for (const n of nodes) {
       if (n.type === "box") continue;
       const parent = n.parentId ? byId.get(n.parentId) : undefined;
       const x = n.position.x + (parent?.position.x ?? 0);
       const y = n.position.y + (parent?.position.y ?? 0);
-      const rows = tableRows.get(n.id);
-      const w = rows === undefined ? CARD_W : TABLE_W;
-      const h = rows === undefined ? CARD_H : 44 + rows * 22;
-      out.set(n.id, { x: x + w / 2, y: y + h / 2 });
+      const r = rows.get(n.id);
+      out.set(n.id, r === undefined ? { x: x + CARD_W / 2, y: y + CARD_H / 2 } : { x: x + TABLE_W / 2, y: y + 18 + r * 12 });
     }
     return out;
   }, [nodes, tables]);
 
   const shownNodes = useMemo(
     () =>
-      nodes.map((n) =>
-        n.type === "box" || !highlight
-          ? n
-          : { ...n, data: { ...n.data, dim: !highlight.nodes.has(n.id), hot: highlight.nodes.has(n.id) } },
-      ),
-    [nodes, highlight],
+      nodes.map((n) => {
+        const base = { ...n, selected: n.id === selected };
+        if (n.type === "box" || !highlight) return base;
+        return { ...base, data: { ...n.data, dim: !highlight.nodes.has(n.id), hot: highlight.nodes.has(n.id) } };
+      }),
+    [nodes, highlight, selected],
   );
 
   const edges: Edge[] = useMemo(
@@ -221,25 +242,25 @@ export default function Diagram({ items, boxes, tables, links, highlight, select
         const [sh, th] = sideFor(a, b);
         const hot = highlight?.links.has(l.id) ?? false;
         const dim = highlight ? !hot : false;
-        const color = hot ? "#0f172a" : "#94a3b8";
+        const color = hot ? "#0f172a" : "#cbd5e1";
         return {
           id: l.id,
           source: l.from,
           target: l.to,
           sourceHandle: sh,
           targetHandle: th,
-          label: l.label,
+          label: hot ? l.label : undefined, // words only on the lines that matter right now
           animated: hot || l.off,
           zIndex: hot ? 10 : 0,
           style: {
             stroke: color,
-            strokeWidth: hot ? 2.5 : 1.4,
+            strokeWidth: hot ? 2.5 : 1.3,
             strokeDasharray: l.off ? "5 5" : undefined,
-            opacity: dim ? 0.12 : 1,
+            opacity: dim ? 0.15 : 1,
           },
-          markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
-          labelStyle: { fontSize: 10, fill: hot ? "#0f172a" : "#64748b", fontWeight: hot ? 600 : 400 },
-          labelBgStyle: { fill: "#ffffff", fillOpacity: dim ? 0.2 : 0.9 },
+          markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
+          labelStyle: { fontSize: 11, fill: "#0f172a", fontWeight: 600 },
+          labelBgStyle: { fill: "#ffffff" },
           labelBgPadding: [4, 2] as [number, number],
           labelShowBg: true,
         };
@@ -248,25 +269,40 @@ export default function Diagram({ items, boxes, tables, links, highlight, select
   );
 
   return (
-    <div className={`${height ?? "h-[68vh] min-h-[460px]"} w-full overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200`}>
+    <div className={`${height ?? "h-[70vh] min-h-[460px]"} relative w-full overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200`}>
       <ReactFlow
-        nodes={shownNodes.map((n) => ({ ...n, selected: n.id === selected }))}
+        nodes={shownNodes}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
-        onNodeClick={(_, n) => n.type !== "box" && onSelect(n.id)}
+        onNodeClick={(_, n) => n.type !== "box" && onSelect(n.id === selected ? null : n.id)}
         onPaneClick={() => onSelect(null)}
         fitView
-        fitViewOptions={{ padding: 0.08 }}
-        minZoom={0.15}
-        maxZoom={2}
+        fitViewOptions={{ padding: 0.06 }}
+        // Touchpad: two fingers move the map, pinch zooms. Mouse: drag to move, Ctrl + wheel or the buttons to zoom.
+        panOnScroll
+        panOnScrollSpeed={0.9}
+        zoomOnScroll={false}
+        zoomOnPinch
+        zoomOnDoubleClick
+        panOnDrag
+        minZoom={0.3}
+        maxZoom={2.5}
         nodesConnectable={false}
-        elementsSelectable
+        proOptions={{ hideAttribution: false }}
       >
-        <Background gap={24} color="#e2e8f0" />
-        <Controls showInteractive={false} />
-        <MiniMap pannable zoomable className="!hidden sm:!block" nodeStrokeWidth={2} />
+        <Background gap={24} color="#eef2f7" />
+        <MiniMap pannable zoomable className="!hidden md:!block" nodeStrokeWidth={2} />
       </ReactFlow>
+      <ZoomButtons />
     </div>
+  );
+}
+
+export default function Diagram(props: Props) {
+  return (
+    <ReactFlowProvider>
+      <Canvas {...props} />
+    </ReactFlowProvider>
   );
 }
