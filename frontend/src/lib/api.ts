@@ -91,7 +91,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type MailStatus = {
   connected: boolean;
   configured: boolean;
-  provider?: string;
+  available?: { gmail: boolean; outlook: boolean }; // which providers the server has keys for
+  provider?: "gmail" | "outlook";
+  provider_name?: string;
   email?: string;
   status?: "ok" | "error";
   last_error?: string | null;
@@ -105,7 +107,8 @@ export type PushSub = { endpoint: string; p256dh: string; auth: string };
 
 export const api = {
   gmail: () => request<MailStatus>("/gmail"),
-  connectGmail: () => request<{ url: string }>("/gmail/connect", { method: "POST" }),
+  connectGmail: (provider: "gmail" | "outlook" = "gmail") =>
+    request<{ url: string }>(`/gmail/connect?provider=${provider}`, { method: "POST" }),
   finishGmail: (code: string, state: string) =>
     request<MailStatus>("/gmail/callback", { method: "POST", body: JSON.stringify({ code, state }) }),
   disconnectGmail: () => request<MailStatus>("/gmail", { method: "DELETE" }),

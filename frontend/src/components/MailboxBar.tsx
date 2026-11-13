@@ -59,7 +59,7 @@ export default function MailboxBar({ onNewMail }: { onNewMail: () => void }) {
         href="/settings"
         className="block rounded-2xl border-2 border-dashed border-slate-200 px-4 py-3 text-sm text-slate-600 hover:border-slate-300"
       >
-        📧 No inbox connected yet. <span className="font-semibold underline">Connect Gmail in Settings</span> so the AI
+        📧 No inbox connected yet. <span className="font-semibold underline">Connect Gmail or Outlook in Settings</span> so the AI
         can read and answer your emails.
       </Link>
     );

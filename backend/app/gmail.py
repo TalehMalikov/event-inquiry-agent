@@ -21,8 +21,11 @@ from cryptography.fernet import Fernet
 
 from .config import (APP_URL, GMAIL_PUBSUB_TOPIC, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_PROJECT_ID,
                      MAILBOX_ENCRYPTION_KEY)
+from .mailbase import MailError
 
 log = logging.getLogger("gmail")
+
+NAME = "Gmail"
 
 MODIFY = "https://www.googleapis.com/auth/gmail.modify"
 SCOPES = [MODIFY]
@@ -42,7 +45,7 @@ API = "https://gmail.googleapis.com/gmail/v1/users/me"
 MAX_BODY = 20000
 
 
-class GmailError(Exception):
+class GmailError(MailError):
     pass
 
 
@@ -102,6 +105,16 @@ def exchange_code(code: str) -> dict:
         raise GmailError("Google did not return a long-lived token. Remove the app at "
                          "myaccount.google.com/permissions and connect again.")
     return tokens
+
+
+def connect_profile(tokens) -> tuple[str, str]:
+    """(email address, starting position in Gmail's change log = now: older emails are not answered)."""
+    prof = profile_with_token(tokens["access_token"])
+    return prof["emailAddress"].lower(), str(prof["historyId"])
+
+
+def scopes_of(tokens) -> str:
+    return tokens.get("scope", "")
 
 
 def revoke(refresh_token: str):
@@ -191,6 +204,15 @@ def new_message_ids(mailbox, start_history_id: str):
         page = d.get("nextPageToken")
         if not page or len(ids) >= 200:
             return ids, latest
+
+
+def poll(mailbox) -> tuple[list, str]:
+    """New message ids since our saved position, and the new position."""
+    try:
+        ids, latest = new_message_ids(mailbox, mailbox.history_id)
+    except HistoryTooOld:
+        ids, latest = recent_inbox_ids(mailbox), call(mailbox, "GET", "/profile")["historyId"]
+    return ids, str(max(int(latest), int(mailbox.history_id or 0)))
 
 
 def recent_inbox_ids(mailbox, limit=10):
@@ -313,7 +335,7 @@ def _reply_raw(mailbox, *, to, subject, body, in_reply_to="", references=""):
 
 
 def send_reply(mailbox, *, to: str, subject: str, body: str, thread_id=None, in_reply_to="", references="",
-               automatic=False):  # noqa: ARG001  (kept for logging/learning; replies look identical either way)
+               automatic=False, **_):  # noqa: ARG001  (automatic: kept for logging; replies look identical either way)
     payload = {"raw": _reply_raw(mailbox, to=to, subject=subject, body=body, in_reply_to=in_reply_to,
                                  references=references)}
     if thread_id:
@@ -328,7 +350,7 @@ def can_draft(mailbox) -> bool:
     return MODIFY in (mailbox.scopes or "").split()
 
 
-def create_draft(mailbox, *, to, subject, body, thread_id=None, in_reply_to="", references="") -> str:
+def create_draft(mailbox, *, to, subject, body, thread_id=None, in_reply_to="", references="", **_) -> str:
     message = {"raw": _reply_raw(mailbox, to=to, subject=subject, body=body, in_reply_to=in_reply_to,
                                  references=references)}
     if thread_id:

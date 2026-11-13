@@ -1,4 +1,5 @@
-"""Gmail endpoints: connect/disconnect, push notifications from Google, manual check, and the daily job.
+"""Mailbox endpoints (Gmail or Outlook): connect/disconnect, push notifications from Google, manual check, the
+scheduled job. Provider details live in gmail.py / outlook.py; this file only uses their shared functions.
 
 Flow for a new email (push when Pub/Sub is configured, otherwise the scheduled check / "Check now"):
   Gmail -> Pub/Sub -> POST /api/gmail/push (or GET /api/cron/gmail) -> ingest(): fetch new inbox messages since our saved
@@ -17,9 +18,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from . import gmail
+from . import gmail, providers
 from .config import CRON_SECRET, GMAIL_PUSH_TOKEN, MAILBOX_ENCRYPTION_KEY
 from .db import Mailbox, Message, SessionLocal, utcnow
+from .mailbase import MailError
 
 log = logging.getLogger("mail")
 router = APIRouter(prefix="/api")
@@ -37,20 +39,24 @@ def _ms_to_dt(ms):
 
 
 def status_dict(mb):
+    available = {name: p.configured() for name, p in providers.PROVIDERS.items()}
     if mb is None:
-        return {"connected": False, "configured": gmail.configured(), "instant": gmail.push_enabled()}
-    return {"connected": True, "configured": True, "provider": mb.provider, "email": mb.email_address,
+        return {"connected": False, "configured": any(available.values()), "available": available,
+                "instant": False}
+    prov = providers.of(mb)
+    return {"connected": True, "configured": True, "available": available, "provider": mb.provider,
+            "provider_name": prov.NAME, "email": mb.email_address,
             "status": mb.status, "last_error": mb.last_error,
             "last_synced_at": mb.last_synced_at.isoformat() if mb.last_synced_at else None,
             "watch_expires_at": mb.watch_expires_at.isoformat() if mb.watch_expires_at else None,
-            "instant": gmail.push_enabled(), "can_draft": gmail.can_draft(mb)}
+            "instant": prov.push_enabled(), "can_draft": prov.can_draft(mb)}
 
 
 def _mailbox_of(s, company_id):
     return s.scalar(select(Mailbox).where(Mailbox.company_id == company_id))
 
 
-# ---------- Ingest: Gmail -> our database ----------
+# ---------- Ingest: the mailbox -> our database ----------
 
 def ingest(mailbox_id: int):
     """Save new inbox emails for one mailbox. Returns (ids the agent should process,
@@ -62,12 +68,10 @@ def ingest(mailbox_id: int):
     with SessionLocal() as s:
         mb = s.scalar(select(Mailbox).where(Mailbox.id == mailbox_id).with_for_update())
         if mb is None:
-            return []
+            return [], []
+        prov = providers.of(mb)
         try:
-            try:
-                ids, latest = gmail.new_message_ids(mb, mb.history_id)
-            except gmail.HistoryTooOld:
-                ids, latest = gmail.recent_inbox_ids(mb), gmail.call(mb, "GET", "/profile")["historyId"]
+            ids, cursor = prov.poll(mb)
             seen = set(s.scalars(select(Message.external_id).where(Message.mailbox_id == mb.id,
                                                                    Message.external_id.in_(ids)))) if ids else set()
             ours = set(s.scalars(select(Message.sent_external_id).where(Message.mailbox_id == mb.id,
@@ -76,20 +80,20 @@ def ingest(mailbox_id: int):
                 if gid in seen or gid in ours:
                     continue
                 try:
-                    e = gmail.fetch(mb, gid)
-                except gmail.GmailError as err:
+                    e = prov.fetch(mb, gid)
+                except MailError as err:
                     if "404" in str(err):  # deleted before we got to it
                         continue
                     raise
                 if "SENT" in e["labels"]:
-                    # The owner replied from Gmail (e.g. pressed Send on our draft) in a thread that waits for them
+                    # The owner replied from their mailbox (e.g. pressed Send on our draft) in a thread that waits
                     w = s.scalar(select(Message).where(Message.mailbox_id == mb.id, Message.status == "waiting",
                                                        Message.external_thread_id == e["thread_id"])
                                  .order_by(Message.id.desc()).limit(1))
                     if w is not None:
                         owner_sent.append((w.id, e["body"]))
                     continue
-                if reason := gmail.skip_reason(e, mb.email_address):
+                if reason := prov.skip_reason(e, mb.email_address):
                     log.info("Skipping %s from %s: %s", gid, e["from_email"], reason)
                     continue
                 m = Message(company_id=mb.company_id, mailbox_id=mb.id, external_id=e["id"],
@@ -103,10 +107,10 @@ def ingest(mailbox_id: int):
                 s.flush()
                 if m.status == "processing":
                     created.append(m.id)
-            mb.history_id = str(max(int(latest), int(mb.history_id or 0)))
+            mb.history_id = cursor
             mb.status, mb.last_error, mb.last_synced_at = "ok", None, utcnow()
             s.commit()
-        except gmail.GmailError as err:
+        except MailError as err:
             s.rollback()
             with SessionLocal() as s2:
                 m2 = s2.get(Mailbox, mailbox_id)
@@ -148,12 +152,16 @@ def register(app_router: APIRouter):
             return status_dict(_mailbox_of(s, who.company_id))
 
     @app_router.post("/gmail/connect")
-    def connect(who=Depends(admin)):
-        if not gmail.configured():
-            raise HTTPException(503, "Gmail isn't set up on the server yet")
-        state = jwt.encode({"u": who.ctx.user_id, "o": who.ctx.org_id, "n": secrets.token_urlsafe(8),
+    def connect(provider: str = "gmail", who=Depends(admin)):
+        """Start connecting the company inbox. provider = gmail | outlook."""
+        if provider not in providers.PROVIDERS:
+            raise HTTPException(400, "Unknown mail provider")
+        prov = providers.get(provider)
+        if not prov.configured():
+            raise HTTPException(503, f"{prov.NAME} isn't set up on the server yet")
+        state = jwt.encode({"u": who.ctx.user_id, "o": who.ctx.org_id, "p": provider, "n": secrets.token_urlsafe(8),
                             "exp": int(time.time()) + 900}, _state_key(), algorithm="HS256")
-        return {"url": gmail.auth_url(state)}
+        return {"url": prov.auth_url(state)}
 
     @app_router.post("/gmail/callback")
     def callback(body: CallbackIn, who=Depends(admin)):
@@ -161,36 +169,39 @@ def register(app_router: APIRouter):
         try:
             st = jwt.decode(body.state, _state_key(), algorithms=["HS256"])
         except jwt.PyJWTError:
-            raise HTTPException(400, "This Gmail sign-in link expired. Click Connect Gmail again.")
+            raise HTTPException(400, "This sign-in link expired. Click Connect again.")
         if st.get("u") != who.ctx.user_id or st.get("o") != who.ctx.org_id:
-            raise HTTPException(400, "This Gmail sign-in was started from another account or company.")
+            raise HTTPException(400, "This sign-in was started from another account or company.")
+        provider = st.get("p", "gmail")
+        if provider not in providers.PROVIDERS:
+            raise HTTPException(400, "Unknown mail provider")
+        prov = providers.get(provider)
         try:
-            tokens = gmail.exchange_code(body.code)
-            prof = gmail.profile_with_token(tokens["access_token"])
-        except gmail.GmailError as e:
+            tokens = prov.exchange_code(body.code)
+            address, cursor = prov.connect_profile(tokens)
+        except MailError as e:
             raise HTTPException(400, str(e))
-        address = prof["emailAddress"].lower()
         with SessionLocal() as s:
             other = s.scalar(select(Mailbox).where(Mailbox.email_address == address))
             if other and other.company_id != who.company_id:
                 raise HTTPException(409, f"{address} is already connected to another company.")
             mb = _mailbox_of(s, who.company_id)
-            if mb and mb.email_address != address:
-                gmail.stop(mb)
+            if mb and (mb.email_address != address or mb.provider != provider):
+                providers.of(mb).stop(mb)
                 s.delete(mb)
                 s.flush()
                 mb = None
             if mb is None:
-                mb = Mailbox(company_id=who.company_id, provider="gmail", email_address=address,
+                mb = Mailbox(company_id=who.company_id, provider=provider, email_address=address,
                              refresh_token_enc="")
                 s.add(mb)
             mb.refresh_token_enc = gmail.encrypt(tokens["refresh_token"])
-            mb.scopes = tokens.get("scope", "")
+            mb.scopes = prov.scopes_of(tokens)
             mb.label_ids = None  # re-check our colored labels on the next use
             s.flush()
-            gmail.forget(mb.id)
+            prov.forget(mb.id)
             # Start from "now": earlier emails are not answered
-            if gmail.push_enabled():
+            if provider == "gmail" and gmail.push_enabled():
                 try:
                     w = gmail.watch(mb)
                 except gmail.GmailError as e:
@@ -199,7 +210,7 @@ def register(app_router: APIRouter):
                 mb.history_id = str(w["historyId"])
                 mb.watch_expires_at = _ms_to_dt(w.get("expiration"))
             else:  # no push: the scheduled check picks up mail from this point on
-                mb.history_id = str(prof["historyId"])
+                mb.history_id = cursor
                 mb.watch_expires_at = None
             mb.status, mb.last_error, mb.last_synced_at = "ok", None, utcnow()
             s.commit()
@@ -210,12 +221,13 @@ def register(app_router: APIRouter):
         with SessionLocal() as s:
             mb = _mailbox_of(s, who.company_id)
             if mb:
-                gmail.stop(mb)
+                prov = providers.of(mb)
+                prov.stop(mb)
                 try:
-                    gmail.revoke(gmail.decrypt(mb.refresh_token_enc))
+                    prov.revoke(gmail.decrypt(mb.refresh_token_enc))
                 except Exception:  # noqa: BLE001
                     pass
-                gmail.forget(mb.id)
+                prov.forget(mb.id)
                 s.delete(mb)
                 s.commit()
         return status_dict(None)
@@ -226,7 +238,7 @@ def register(app_router: APIRouter):
         with SessionLocal() as s:
             mb = _mailbox_of(s, who.company_id)
             if mb is None:
-                raise HTTPException(409, "Connect Gmail first")
+                raise HTTPException(409, "Connect your inbox first")
             mailbox_id = mb.id
         n = ingest_and_process(mailbox_id)
         with SessionLocal() as s:
@@ -248,7 +260,7 @@ async def push(request: Request, token: str = ""):
         return Response(status_code=204)
     get_graph()
     with SessionLocal() as s:
-        mb = s.scalar(select(Mailbox).where(Mailbox.email_address == address))
+        mb = s.scalar(select(Mailbox).where(Mailbox.email_address == address, Mailbox.provider == "gmail"))
         mailbox_id = mb.id if mb else None
     if mailbox_id:
         from starlette.concurrency import run_in_threadpool
@@ -269,13 +281,13 @@ def cron(request: Request):
     for mailbox_id in ids:
         with SessionLocal() as s:
             mb = s.get(Mailbox, mailbox_id)
-            if gmail.push_enabled() and (mb.watch_expires_at is None
+            if mb.provider == "gmail" and gmail.push_enabled() and (mb.watch_expires_at is None
                                          or mb.watch_expires_at < utcnow() + timedelta(days=3)):
                 try:
                     w = gmail.watch(mb)
                     mb.watch_expires_at = _ms_to_dt(w.get("expiration"))
                     renewed += 1
-                except gmail.GmailError as e:
+                except MailError as e:
                     mb.status, mb.last_error = "error", str(e)[:1000]
                 s.commit()
         processed += ingest_and_process(mailbox_id)

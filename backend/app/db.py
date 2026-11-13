@@ -61,7 +61,7 @@ class Mailbox(Base):
     provider: Mapped[str] = mapped_column(String(20), default="gmail")
     email_address: Mapped[str] = mapped_column(String(320), unique=True)
     refresh_token_enc: Mapped[str] = mapped_column(Text)  # encrypted (Fernet); never stored in plain text
-    history_id: Mapped[Optional[str]] = mapped_column(String(40))  # where we are in Gmail's change log
+    history_id: Mapped[Optional[str]] = mapped_column(Text)  # where we are: Gmail history id / Outlook timestamps
     watch_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(20), default="ok")  # ok | error
     last_error: Mapped[Optional[str]] = mapped_column(Text)
@@ -91,13 +91,13 @@ class Message(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     # Where it came from (Gmail). Unique per mailbox, so a repeated notification never creates a duplicate.
     mailbox_id: Mapped[Optional[int]] = mapped_column(ForeignKey("mailboxes.id", ondelete="SET NULL"))
-    external_id: Mapped[Optional[str]] = mapped_column(String(128))
-    external_thread_id: Mapped[Optional[str]] = mapped_column(String(128))
+    external_id: Mapped[Optional[str]] = mapped_column(String(512))
+    external_thread_id: Mapped[Optional[str]] = mapped_column(String(512))
     rfc_message_id: Mapped[Optional[str]] = mapped_column(Text)  # for In-Reply-To, so replies stay in the thread
     email_references: Mapped[Optional[str]] = mapped_column(Text)
     reply_to: Mapped[Optional[str]] = mapped_column(String(320))
-    draft_external_id: Mapped[Optional[str]] = mapped_column(String(128))  # our draft in the owner's Gmail
-    sent_external_id: Mapped[Optional[str]] = mapped_column(String(128))  # the reply that went out
+    draft_external_id: Mapped[Optional[str]] = mapped_column(String(512))  # our draft in the owner's Gmail
+    sent_external_id: Mapped[Optional[str]] = mapped_column(String(512))  # the reply that went out
     thread_id: Mapped[str] = mapped_column(String(64), unique=True)  # LangGraph thread
     from_name: Mapped[str] = mapped_column(String(200))
     from_email: Mapped[str] = mapped_column(String(320))
@@ -153,6 +153,11 @@ MIGRATIONS = [
     "ALTER TABLE mailboxes ADD COLUMN IF NOT EXISTS label_ids JSON",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS draft_external_id VARCHAR(128)",
     "ALTER TABLE messages ADD COLUMN IF NOT EXISTS sent_external_id VARCHAR(128)",
+    "ALTER TABLE mailboxes ALTER COLUMN history_id TYPE TEXT",
+    "ALTER TABLE messages ALTER COLUMN external_id TYPE VARCHAR(512)",
+    "ALTER TABLE messages ALTER COLUMN external_thread_id TYPE VARCHAR(512)",
+    "ALTER TABLE messages ALTER COLUMN draft_external_id TYPE VARCHAR(512)",
+    "ALTER TABLE messages ALTER COLUMN sent_external_id TYPE VARCHAR(512)",
 ]
 
 

@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 
-export default function GmailCallback() {
+// Google (Gmail) and Microsoft (Outlook) both send the owner back to a page that renders this.
+export default function GmailCallback({ name = "Gmail" }: { name?: string }) {
   const params = useSearchParams();
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -18,14 +19,14 @@ export default function GmailCallback() {
     const state = params.get("state");
     if (params.get("error") || !code || !state) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time result of reading the URL
-      setError(params.get("error") === "access_denied" ? "You cancelled the Gmail sign-in." : "Gmail sign-in failed.");
+      setError(params.get("error") === "access_denied" ? `You cancelled the ${name} sign-in.` : `${name} sign-in failed.`);
       return;
     }
     api
       .finishGmail(code, state)
       .then(() => router.replace("/"))
       .catch((e) => setError((e as Error).message));
-  }, [params, router]);
+  }, [params, router, name]);
 
   return (
     <div className="mx-auto mt-16 max-w-sm text-center">
@@ -37,7 +38,7 @@ export default function GmailCallback() {
           </Link>
         </>
       ) : (
-        <p className="text-sm text-slate-500">Connecting Gmail…</p>
+        <p className="text-sm text-slate-500">Connecting {name}…</p>
       )}
     </div>
   );
